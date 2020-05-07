@@ -3580,6 +3580,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
   real, dimension(:), allocatable :: h_stack
   integer :: is_obc2, js_obc2
   real :: net_H_src, net_H_int, scl_fac
+  real :: tidal_vel
   real, pointer, dimension(:,:)   :: normal_trans_bt=>NULL() ! barotropic transport
   integer :: turns      ! Number of index quarter turns
 
@@ -3997,6 +3998,9 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
         endif
       endif
 
+    enddo
+    do m = 1,segment%num_fields
+
       if (segment%field(m)%fid>0) then
         ! todo: uamp and vamp here?
         ! calculate external BT velocity and transport if needed
@@ -4008,15 +4012,16 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             I=is_obc
             do j=js_obc+1,je_obc
               normal_trans_bt(I,j) = 0.0
+              ! todo: add if: tidal obcs
+              ! todo: add phase
+              tidal_vel = US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,1) * &
+                sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
               do k=1,G%ke
-                segment%normal_vel(I,j,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(I,j,k)
-                segment%normal_vel(I,j,k) = segment%normal_vel(I,j,k) -1 * sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0))
-                segment%normal_trans(I,j,k) = (US%m_s_to_L_T*segment%field(m)%buffer_dst(I,j,k) -1 * sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0)))*segment%h(I,j,k) * &
-                          G%dyCu(I,j)
+                segment%normal_vel(I,j,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(I,j,k) + tidal_vel
+                segment%normal_trans(I,j,k) = segment%normal_vel(I,j,k)*segment%h(I,j,k) * G%dyCu(I,j)
                 normal_trans_bt(I,j) = normal_trans_bt(I,j) + segment%normal_trans(I,j,k)
               enddo
               segment%normal_vel_bt(I,j) = normal_trans_bt(I,j) / (max(segment%Htot(I,j),1.e-12) * G%dyCu(I,j))
-              
               if (associated(segment%nudged_normal_vel)) segment%nudged_normal_vel(I,j,:) = segment%normal_vel(I,j,:)
             enddo
           elseif (trim(segment%field(m)%name) == 'V' .and. segment%is_N_or_S) then
