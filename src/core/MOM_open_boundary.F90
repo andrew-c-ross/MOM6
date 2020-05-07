@@ -816,15 +816,11 @@ subroutine initialize_segment_data(G, OBC, PF)
             if (segment%is_E_or_W) then
               if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX') then
                 allocate(segment%field(m)%dz_src(IsdB:IedB,JsdB:JedB,siz(3)))
-              elseif (segment%field(m)%name == 'Vamp' .or. segment%field(m)%name == 'Vphase') then
-                allocate(segment%field(m)%dz_src(IsdB:IedB,JsdB:JedB,siz(3)))
               else
                 allocate(segment%field(m)%dz_src(IsdB:IedB,jsd:jed,siz(3)))
               endif
             else
               if (segment%field(m)%name == 'U' .or. segment%field(m)%name == 'DUDY') then
-                allocate(segment%field(m)%dz_src(IsdB:IedB,JsdB:JedB,siz(3)))
-              elseif (segment%field(m)%name == 'Uamp' .or. segment%field(m)%name == 'Uphase') then
                 allocate(segment%field(m)%dz_src(IsdB:IedB,JsdB:JedB,siz(3)))
               else
                 allocate(segment%field(m)%dz_src(isd:ied,JsdB:JedB,siz(3)))
@@ -3656,8 +3652,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
           if (siz(3) /= segment%field(m)%nk_src) call MOM_error(FATAL,'nk_src inconsistency')
           if (segment%field(m)%nk_src > 1) then
             if (segment%is_E_or_W) then
-              if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX' .or. &
-                  segment%field(m)%name == 'Vamp' .or. segment%field(m)%name == 'Vphase') then
+              if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX') then
                 allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc:je_obc,G%ke))
               else
                 allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc+1:je_obc,G%ke))
@@ -3813,8 +3808,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
           endif
           if (OBC%brushcutter_mode) then
             if (segment%is_E_or_W) then
-              if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX' .or. &
-                segment%field(m)%name == 'Vamp' .or. segment%field(m)%name == 'Vphase') then
+              if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX') then
                 segment%field(m)%dz_src(is_obc,:,:) = &
                     tmp_buffer(1,2*(js_obc+G%jdg_offset)+1:2*(je_obc+G%jdg_offset)+1:2,:)
               else
@@ -3822,8 +3816,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
                     tmp_buffer(1,2*(js_obc+G%jdg_offset)+1:2*(je_obc+G%jdg_offset):2,:)
               endif
             else
-              if (segment%field(m)%name == 'U' .or. segment%field(m)%name == 'DUDY' .or. &
-                segment%field(m)%name == 'Uamp' .or. segment%field(m)%name == 'Uphase') then
+              if (segment%field(m)%name == 'U' .or. segment%field(m)%name == 'DUDY') then
                 segment%field(m)%dz_src(:,js_obc,:) = &
                     tmp_buffer(2*(is_obc+G%idg_offset)+1:2*(ie_obc+G%idg_offset)+1:2,1,:)
               else
@@ -3833,15 +3826,13 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             endif
           else
             if (segment%is_E_or_W) then
-              if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX' .or. &
-                segment%field(m)%name == 'Vamp' .or. segment%field(m)%name == 'Vphase') then
+              if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX') then
                 segment%field(m)%dz_src(is_obc,:,:)=tmp_buffer(1,js_obc+G%jdg_offset+1:je_obc+G%jdg_offset+1,:)
               else
                 segment%field(m)%dz_src(is_obc,:,:)=tmp_buffer(1,js_obc+G%jdg_offset+1:je_obc+G%jdg_offset,:)
               endif
             else
-              if (segment%field(m)%name == 'U' .or. segment%field(m)%name == 'DUDY' .or. &
-                segment%field(m)%name == 'Uamp' .or. segment%field(m)%name == 'Uphase') then
+              if (segment%field(m)%name == 'U' .or. segment%field(m)%name == 'DUDY') then
                 segment%field(m)%dz_src(:,js_obc,:)=tmp_buffer(is_obc+G%idg_offset+1:ie_obc+G%idg_offset+1,1,:)
               else
                 segment%field(m)%dz_src(:,js_obc,:)=tmp_buffer(is_obc+G%idg_offset+1:ie_obc+G%idg_offset,1,:)
@@ -3855,8 +3846,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             ishift=1
             if (segment%direction == OBC_DIRECTION_E) ishift=0
             I=is_obc
-            if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX' .or. &
-                segment%field(m)%name == 'Vamp' .or. segment%field(m)%name == 'Vphase') then
+            if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX') then
               ! Do q points for the whole segment
               do J=max(js_obc,jsd),min(je_obc,jed-1)
                 ! Using the h remapping approach
@@ -3902,8 +3892,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             jshift=1
             if (segment%direction == OBC_DIRECTION_N) jshift=0
             J=js_obc
-            if (segment%field(m)%name == 'U' .or. segment%field(m)%name == 'DUDY' .or. &
-                segment%field(m)%name == 'Uamp' .or. segment%field(m)%name == 'Uphase') then
+            if (segment%field(m)%name == 'U' .or. segment%field(m)%name == 'DUDY') then
               ! Do q points for the whole segment
               do I=max(is_obc,isd),min(ie_obc,ied-1)
                 segment%field(m)%buffer_dst(I,J,:)=0.0  ! initialize remap destination buffer
@@ -4013,7 +4002,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             do j=js_obc+1,je_obc
               normal_trans_bt(I,j) = 0.0
               ! todo: add if: tidal obcs
-              ! todo: add phase
+              ! todo: add period
               tidal_vel = US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,1) * &
                 sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
               do k=1,G%ke
