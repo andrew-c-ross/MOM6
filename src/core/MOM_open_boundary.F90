@@ -260,7 +260,9 @@ type, public :: ocean_OBC_type
                    tracer_y_reservoirs_used => NULL() !< Dimensioned by the number of tracers, set globally,
                                                       !! true for those with y reservoirs (needed for restarts).
   integer                       :: ntr = 0            !< number of tracers
-  logical :: add_tidal_BCs = .false.                  !< If True, add tidal cycles to boundary conditions
+
+  integer :: n_tidal_harmonics = 0                      !< If greater than 0, add tidal cycles to boundary conditions
+  real, allocatable, dimension(:) :: tidal_periods
 
   ! Properties of the segments used.
   type(OBC_segment_type), pointer, dimension(:) :: &
@@ -432,6 +434,14 @@ subroutine open_boundary_config(G, US, param_file, OBC)
          "If RAMP_OBCS is true, this sets the ramping timescale.", &
          units="days", default=1.0, scale=86400.0*US%s_to_T)
 
+         call get_param(param_file, mdl, "OBC_N_TIDAL_HARMONICS", OBC%n_tidal_harmonics, &
+         "Number of tidal harmonics being added to the open boundary.", &
+         default=0)
+    allocate(OBC%tidal_periods(OBC%n_tidal_harmonics))
+    call get_param(param_file, mdl, "OBC_TIDAL_PERIODS", OBC%tidal_periods, &
+        "Timescales in hours for each harmonic", &
+        fail_if_missing=.true., default=0., units="hours", scale=3600.0*US%s_to_T)
+
     call get_param(param_file, mdl, "DEBUG", debug, default=.false.)
     call get_param(param_file, mdl, "DEBUG_OBC", debug_OBC, default=.false.)
     if (debug_OBC .or. debug) &
@@ -474,11 +484,11 @@ subroutine open_boundary_config(G, US, param_file, OBC)
       OBC%segment(l)%gradient = .false.
       OBC%segment(l)%values_needed = .false.
       OBC%segment(l)%u_values_needed = .false.
-      OBC%segment(l)%uamp_values_needed = OBC%add_tidal_BCs
-      OBC%segment(l)%uphase_values_needed = OBC%add_tidal_BCs
+      OBC%segment(l)%uamp_values_needed = OBC%n_tidal_harmonics  ! int -> logical implicitly
+      OBC%segment(l)%uphase_values_needed = OBC%n_tidal_harmonics  ! int -> logical implicitly
       OBC%segment(l)%v_values_needed = .false.
-      OBC%segment(l)%vamp_values_needed = OBC%add_tidal_BCs
-      OBC%segment(l)%vphase_values_needed = OBC%add_tidal_BCs
+      OBC%segment(l)%vamp_values_needed = OBC%n_tidal_harmonics  ! int -> logical implicitly
+      OBC%segment(l)%vphase_values_needed = OBC%n_tidal_harmonics  ! int -> logical implicitly
       OBC%segment(l)%t_values_needed = .false.
       OBC%segment(l)%s_values_needed = .false.
       OBC%segment(l)%z_values_needed = .false.
