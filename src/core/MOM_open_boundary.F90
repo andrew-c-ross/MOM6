@@ -140,6 +140,8 @@ type, public :: OBC_segment_type
   logical :: t_values_needed!< Whether or not external T OBC fields are needed.
   logical :: s_values_needed!< Whether or not external S OBC fields are needed.
   logical :: z_values_needed!< Whether or not external zeta OBC fields are needed.
+  logical :: zamp_values_needed!< Whether or not external zeta amplitude OBC fields are needed.
+  logical :: zphase_values_needed!< Whether or not external zeta phase OBC fields are needed.
   logical :: g_values_needed!< Whether or not external gradient OBC fields are needed.
   integer :: direction      !< Boundary faces one of the four directions.
   logical :: is_N_or_S      !< True if the OB is facing North or South and exists on this PE.
@@ -156,6 +158,8 @@ type, public :: OBC_segment_type
   integer :: uphase_index
   integer :: vamp_index
   integer :: vphase_index
+  integer :: zamp_index
+  integer :: zphase_index
   real :: Velocity_nudging_timescale_in  !< Nudging timescale on inflow [T ~> s].
   real :: Velocity_nudging_timescale_out !< Nudging timescale on outflow [T ~> s].
   logical :: on_pe          !< true if segment is located in the computational domain
@@ -492,6 +496,8 @@ subroutine open_boundary_config(G, US, param_file, OBC)
       OBC%segment(l)%t_values_needed = .false.
       OBC%segment(l)%s_values_needed = .false.
       OBC%segment(l)%z_values_needed = .false.
+      OBC%segment(l)%zamp_values_needed = OBC%n_tidal_harmonics  ! int -> logical implicitly
+      OBC%segment(l)%zphase_values_needed = OBC%n_tidal_harmonics  ! int -> logical implicitly
       OBC%segment(l)%g_values_needed = .false.
       OBC%segment(l)%direction = OBC_NONE
       OBC%segment(l)%is_N_or_S = .false.
@@ -781,6 +787,12 @@ subroutine initialize_segment_data(G, OBC, PF)
                 segment%uphase_index = m
               else if (segment%field(m)%name == 'SSH') then
                 segment%z_values_needed = .false.
+              else if (segment%field(m)%name == 'SSHamp') then
+                segment%zamp_values_needed = .false.
+                segment%zamp_index = m
+              else if (segment%field(m)%name == 'SSHphase') then
+                segment%zphase_values_needed = .false.
+                segment%zphase_index = m
               else if (segment%field(m)%name == 'TEMP') then
                 segment%t_values_needed = .false.
               else if (segment%field(m)%name == 'SALT') then
@@ -814,6 +826,12 @@ subroutine initialize_segment_data(G, OBC, PF)
                 segment%vphase_index = m
               else if (segment%field(m)%name == 'SSH') then
                 segment%z_values_needed = .false.
+              else if (segment%field(m)%name == 'SSHamp') then
+                segment%zamp_values_needed = .false.
+                segment%zamp_index = m
+              else if (segment%field(m)%name == 'SSHphase') then
+                segment%zphase_values_needed = .false.
+                segment%zphase_index = m
               else if (segment%field(m)%name == 'TEMP') then
                 segment%t_values_needed = .false.
               else if (segment%field(m)%name == 'SALT') then
@@ -866,6 +884,10 @@ subroutine initialize_segment_data(G, OBC, PF)
           segment%vphase_values_needed = .false.
         elseif (segment%field(m)%name == 'SSH') then
           segment%z_values_needed = .false.
+        elseif (segment%field(m)%name == 'SSHamp') then
+          segment%zamp_values_needed = .false.
+        elseif (segment%field(m)%name == 'SSHphase') then
+          segment%zphase_values_needed = .false.
         elseif (segment%field(m)%name == 'TEMP') then
           segment%t_values_needed = .false.
         elseif (segment%field(m)%name == 'SALT') then
@@ -877,8 +899,8 @@ subroutine initialize_segment_data(G, OBC, PF)
     enddo
     if (segment%u_values_needed .or. segment%uamp_values_needed .or. segment%uphase_values_needed .or. &
         segment%v_values_needed .or. segment%vamp_values_needed .or. segment%vphase_values_needed .or. &
-        segment%t_values_needed .or. segment%s_values_needed .or. & ! todo: ssh_amp and ssh_phase
-        segment%z_values_needed .or. segment%g_values_needed) then
+        segment%t_values_needed .or. segment%s_values_needed .or. segment%g_values_needed .or. &
+        segment%z_values_needed .or. segment%zamp_values_needed .or. segment%zphase_values_needed ) then
       write(mesg,'("Values needed for OBC segment ",I3)') n
       call MOM_error(FATAL, mesg)
     endif
@@ -3970,7 +3992,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc+1:je_obc,1))
             elseif (segment%field(m)%name == 'DVDX') then
               allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc:je_obc,G%ke))
-            elseif (segment%field(m)%name == 'SSH') then
+            elseif (segment%field(m)%name == 'SSH' .or. segment%field(m)%name == 'SSHamp' .or. segment%field(m)%name == 'SSHphase') then
               allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc:je_obc,1))
             else
               allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc+1:je_obc,G%ke))
@@ -3988,7 +4010,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               allocate(segment%field(m)%buffer_dst(is_obc+1:ie_obc,js_obc:je_obc,1))
             elseif (segment%field(m)%name == 'DUDY') then
               allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc:je_obc,G%ke))
-            elseif (segment%field(m)%name == 'SSH') then
+            elseif (segment%field(m)%name == 'SSH' .or. segment%field(m)%name == 'SSHamp' .or. segment%field(m)%name == 'SSHphase') then
               allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc:je_obc,1))
             else
               allocate(segment%field(m)%buffer_dst(is_obc+1:ie_obc,js_obc:je_obc,G%ke))
@@ -4104,17 +4126,20 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
         js_obc2 = js_obc+1
       endif
 
+      ! todo: check if obc
       if (trim(segment%field(m)%name) == 'SSH') then
         if (OBC%ramp) then
           do j=js_obc2,je_obc
             do i=is_obc2,ie_obc
-              segment%eta(i,j) = OBC%ramp_value * segment%field(m)%buffer_dst(i,j,1)
+              segment%eta(i,j) = OBC%ramp_value * (segment%field(m)%buffer_dst(i,j,1) + segment%field(segment%zamp_index)%buffer_dst(i,j,1) * &
+                  sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%zphase_index)%buffer_dst(i,j,1)))
             enddo
           enddo
         else
           do j=js_obc2,je_obc
             do i=is_obc2,ie_obc
-              segment%eta(i,j) = segment%field(m)%buffer_dst(i,j,1)
+              segment%eta(i,j) = segment%field(m)%buffer_dst(i,j,1) + segment%field(segment%zamp_index)%buffer_dst(i,j,1) * &
+                  sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%zphase_index)%buffer_dst(i,j,1))
             enddo
           enddo
         endif
