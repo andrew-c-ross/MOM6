@@ -1458,8 +1458,9 @@ subroutine log_param_char(CS, modulename, varname, value, desc, units, &
 
   character(len=240) :: mesg, myunits
 
-  write(mesg, '("  ",a," ",a,": ",a)') &
-    trim(modulename), trim(varname), trim(value)
+ ! failure here if a string? is too long
+!  write(mesg, '("  ",a," ",a,": ",a)') &
+!     trim(modulename), trim(varname), trim(value)
   if (is_root_pe()) then
     if (CS%log_open) write(CS%stdlog,'(a)') trim(mesg)
     if (CS%log_to_stdout) write(CS%stdout,'(a)') trim(mesg)

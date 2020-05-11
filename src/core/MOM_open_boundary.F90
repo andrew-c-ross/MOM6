@@ -595,7 +595,7 @@ subroutine initialize_segment_data(G, OBC, PF)
   type(param_file_type),  intent(in)    :: PF  !< Parameter file handle
 
   integer :: n,m,num_fields
-  character(len=256) :: segstr, filename
+  character(len=512) :: segstr, filename
   character(len=20)  :: segnam, suffix
   character(len=32)  :: varnam, fieldname
   real               :: value
