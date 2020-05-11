@@ -797,17 +797,21 @@ subroutine initialize_segment_data(G, OBC, PF)
             elseif (segment%field(m)%name == 'Uamp') then
               allocate(segment%field(m)%buffer_src(IsdB:IedB,JsdB:JedB,siz2(3)))
               segment%uamp_values_needed = .false.
+              segment%uamp_index = m
             elseif (segment%field(m)%name == 'Uphase') then
               allocate(segment%field(m)%buffer_src(IsdB:IedB,JsdB:JedB,siz2(3)))
               segment%uphase_values_needed = .false.
+              segment%uphase_index = m
             else
               allocate(segment%field(m)%buffer_src(isd:ied,JsdB:JedB,siz2(3)))
               if (segment%field(m)%name == 'V') then
                 segment%v_values_needed = .false.
               elseif (segment%field(m)%name == 'Vamp') then
                 segment%vamp_values_needed = .false.
+                segment%vamp_index = m
               elseif (segment%field(m)%name == 'Vphase') then
                 segment%vphase_values_needed = .false.
+                segment%vphase_index = m
               else if (segment%field(m)%name == 'SSH') then
                 segment%z_values_needed = .false.
               else if (segment%field(m)%name == 'TEMP') then
@@ -4001,11 +4005,6 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
     do m = 1,segment%num_fields
 
       if (segment%field(m)%fid>0) then
-        ! todo: uamp and vamp here?
-        ! calculate external BT velocity and transport if needed
-        
-        !G%ke=1
-        ! write(*,*) time_type_to_real(Time)
         if (trim(segment%field(m)%name) == 'U' .or. trim(segment%field(m)%name) == 'V') then
           if (trim(segment%field(m)%name) == 'U' .and. segment%is_E_or_W) then
             I=is_obc
@@ -4027,9 +4026,13 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             J=js_obc
             do i=is_obc+1,ie_obc
               normal_trans_bt(i,J) = 0.0
+              ! todo: add if: tidal obcs
+              ! todo: add period
+              tidal_vel = US%m_s_to_L_T*segment%field(segment%vamp_index)%buffer_dst(I,j,1) * &
+                sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
               do k=1,G%ke
-                segment%normal_vel(i,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(i,J,k)
-                segment%normal_trans(i,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(i,J,k)*segment%h(i,J,k) * &
+                segment%normal_vel(i,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(i,J,k) + tidal_vel
+                segment%normal_trans(i,J,k) = segment%normal_vel(i,J,k)*segment%h(i,J,k) * &
                           G%dxCv(i,J)
                 normal_trans_bt(i,J) = normal_trans_bt(i,J) + segment%normal_trans(i,J,k)
               enddo
@@ -4040,8 +4043,10 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
                   associated(segment%tangential_vel)) then
             I=is_obc
             do J=js_obc,je_obc
+              tidal_vel = US%m_s_to_L_T*segment%field(segment%vamp_index)%buffer_dst(I,j,1) * &
+                sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
               do k=1,G%ke
-                segment%tangential_vel(I,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(I,J,k)
+                segment%tangential_vel(I,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(I,J,k) + tidal_vel
               enddo
               if (associated(segment%nudged_tangential_vel)) &
                 segment%nudged_tangential_vel(I,J,:) = segment%tangential_vel(I,J,:)
@@ -4049,9 +4054,11 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
           elseif (trim(segment%field(m)%name) == 'U' .and. segment%is_N_or_S .and. &
                   associated(segment%tangential_vel)) then
             J=js_obc
+            tidal_vel = US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,1) * &
+                sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
             do I=is_obc,ie_obc
               do k=1,G%ke
-                segment%tangential_vel(I,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(I,J,k)
+                segment%tangential_vel(I,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(I,J,k) + tidal_vel
               enddo
               if (associated(segment%nudged_tangential_vel)) &
                 segment%nudged_tangential_vel(I,J,:) = segment%tangential_vel(I,J,:)
