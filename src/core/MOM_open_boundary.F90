@@ -442,7 +442,7 @@ subroutine open_boundary_config(G, US, param_file, OBC)
     call get_param(param_file, mdl, "OBC_N_TIDAL_HARMONICS", OBC%n_tidal_harmonics, &
          "Number of tidal harmonics being added to the open boundary.", &
          default=0)
-    if(OBC%n_tidal_harmonics > 0) then 
+    if(OBC%n_tidal_harmonics > 0) then
       OBC%add_tidal_harmonics = .true.
     else
       OBC%add_tidal_harmonics = .false.
@@ -494,16 +494,16 @@ subroutine open_boundary_config(G, US, param_file, OBC)
       OBC%segment(l)%gradient = .false.
       OBC%segment(l)%values_needed = .false.
       OBC%segment(l)%u_values_needed = .false.
-      OBC%segment(l)%uamp_values_needed = OBC%add_tidal_harmonics 
-      OBC%segment(l)%uphase_values_needed = OBC%add_tidal_harmonics 
+      OBC%segment(l)%uamp_values_needed = OBC%add_tidal_harmonics
+      OBC%segment(l)%uphase_values_needed = OBC%add_tidal_harmonics
       OBC%segment(l)%v_values_needed = .false.
-      OBC%segment(l)%vamp_values_needed = OBC%add_tidal_harmonics 
-      OBC%segment(l)%vphase_values_needed = OBC%add_tidal_harmonics 
+      OBC%segment(l)%vamp_values_needed = OBC%add_tidal_harmonics
+      OBC%segment(l)%vphase_values_needed = OBC%add_tidal_harmonics
       OBC%segment(l)%t_values_needed = .false.
       OBC%segment(l)%s_values_needed = .false.
       OBC%segment(l)%z_values_needed = .false.
-      OBC%segment(l)%zamp_values_needed = OBC%add_tidal_harmonics 
-      OBC%segment(l)%zphase_values_needed = OBC%add_tidal_harmonics 
+      OBC%segment(l)%zamp_values_needed = OBC%add_tidal_harmonics
+      OBC%segment(l)%zphase_values_needed = OBC%add_tidal_harmonics
       OBC%segment(l)%g_values_needed = .false.
       OBC%segment(l)%direction = OBC_NONE
       OBC%segment(l)%is_N_or_S = .false.
@@ -607,7 +607,7 @@ subroutine initialize_segment_data(G, OBC, PF)
   type(param_file_type),  intent(in)    :: PF  !< Parameter file handle
 
   integer :: n,m,num_fields
-  character(len=512) :: segstr, filename
+  character(len=1024) :: segstr, filename
   character(len=20)  :: segnam, suffix
   character(len=32)  :: varnam, fieldname
   real               :: value
@@ -615,7 +615,7 @@ subroutine initialize_segment_data(G, OBC, PF)
   character(len=128) :: inputdir
   type(OBC_segment_type), pointer :: segment => NULL() ! pointer to segment type list
   character(len=32)  :: remappingScheme
-  character(len=256) :: mesg    ! Message for error messages.
+  character(len=512) :: mesg    ! Message for error messages.
   logical :: check_reconstruction, check_remapping, force_bounds_in_subcell
   logical :: answers_2018, default_2018_answers
   integer, dimension(4) :: siz,siz2
@@ -765,7 +765,7 @@ subroutine initialize_segment_data(G, OBC, PF)
             endif
           endif
           siz2(3)=siz(3)
-          
+
           if (segment%is_E_or_W) then
             if (segment%field(m)%name == 'V') then
               allocate(segment%field(m)%buffer_src(IsdB:IedB,JsdB:JedB,siz2(3)))
@@ -1052,7 +1052,7 @@ subroutine setup_u_point_obc(OBC, G, US, segment_str, l_seg, PF, reentrant_y)
   integer :: I_obc, Js_obc, Je_obc ! Position of segment in global index space
   integer :: j, a_loop
   character(len=32) :: action_str(8)
-  character(len=128) :: segment_param_str
+  character(len=512) :: segment_param_str
   real, allocatable, dimension(:)  :: tnudge
   ! This returns the global indices for the segment
   call parse_segment_str(G%ieg, G%jeg, segment_str, I_obc, Js_obc, Je_obc, action_str, reentrant_y)
@@ -1192,7 +1192,7 @@ subroutine setup_v_point_obc(OBC, G, US, segment_str, l_seg, PF, reentrant_x)
   integer :: J_obc, Is_obc, Ie_obc ! Position of segment in global index space
   integer :: i, a_loop
   character(len=32) :: action_str(8)
-  character(len=128) :: segment_param_str
+  character(len=512) :: segment_param_str
   real, allocatable, dimension(:)  :: tnudge
 
   ! This returns the global indices for the segment
@@ -1446,7 +1446,7 @@ end subroutine parse_segment_str
    integer, optional, intent(out)           :: num_fields !< The number of fields in the segment data
    logical, optional, intent(in)            :: debug      !< If present and true, write verbose debugging messages
    ! Local variables
-   character(len=128) :: word1, word2, word3, method
+   character(len=512) :: word1, word2, word3, method
    integer :: lword, nfields, n, m
    logical :: continue,dbg
    character(len=32), dimension(MAX_OBC_FIELDS) :: flds
@@ -1529,13 +1529,13 @@ end subroutine parse_segment_str
 
   ! Local variables
   integer :: n,m,num_fields
-  character(len=256) :: segstr, filename
+  character(len=512) :: segstr, filename
   character(len=20)  :: segnam, suffix
   character(len=32)  :: varnam, fieldname
   real               :: value
   character(len=32), dimension(MAX_OBC_FIELDS) :: fields  ! segment field names
   type(OBC_segment_type), pointer :: segment => NULL() ! pointer to segment type list
-  character(len=256) :: mesg    ! Message for error messages.
+  character(len=512) :: mesg    ! Message for error messages.
 
   do n=1, OBC%number_of_segments
     segment => OBC%segment(n)
@@ -1593,7 +1593,7 @@ end subroutine parse_for_tracer_reservoirs
    real,              intent(out) :: param_value !< The value of the parameter
    logical, optional, intent(in)  :: debug       !< If present and true, write verbose debugging messages
    ! Local variables
-   character(len=128) :: word1, word2, word3, method
+   character(len=512) :: word1, word2, word3, method
    integer :: lword, nfields, n, m
    logical :: continue,dbg
    character(len=32), dimension(MAX_OBC_FIELDS) :: flds
@@ -4024,7 +4024,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
           endif
           segment%field(m)%buffer_dst(:,:,:) = segment%field(m)%value
           if (trim(segment%field(m)%name) == 'U' .or. trim(segment%field(m)%name) == 'V') then
-            segment%field(m)%bt_vel(:,:) = segment%field(m)%value  ! <- 
+            segment%field(m)%bt_vel(:,:) = segment%field(m)%value  ! <-
           endif
         endif
       endif
@@ -4262,7 +4262,7 @@ subroutine register_OBC(name, param_file, Reg)
   type(param_file_type), intent(in)  :: param_file  !< file to parse for  model parameter values
   type(OBC_registry_type), pointer   :: Reg         !< pointer to the tracer registry
   integer :: nobc
-  character(len=256) :: mesg    ! Message for error messages.
+  character(len=512) :: mesg    ! Message for error messages.
 
   if (.not. associated(Reg)) call OBC_registry_init(param_file, Reg)
 
@@ -4291,7 +4291,7 @@ subroutine OBC_registry_init(param_file, Reg)
 
 #include "version_variable.h"
   character(len=40)  :: mdl = "MOM_open_boundary" ! This module's name.
-  character(len=256) :: mesg    ! Message for error messages.
+  character(len=512) :: mesg    ! Message for error messages.
 
   if (.not.associated(Reg)) then ; allocate(Reg)
   else ; return ; endif
@@ -4348,7 +4348,7 @@ subroutine segment_tracer_registry_init(param_file, segment)
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "segment_tracer_registry_init" ! This routine's name.
-  character(len=256) :: mesg    ! Message for error messages.
+  character(len=512) :: mesg    ! Message for error messages.
 
   if (.not.associated(segment%tr_Reg)) then
     allocate(segment%tr_Reg)
@@ -4392,7 +4392,7 @@ subroutine register_segment_tracer(tr_ptr, param_file, GV, segment, &
   integer :: ntseg
   integer :: isd, ied, jsd, jed
   integer :: IsdB, IedB, JsdB, JedB
-  character(len=256) :: mesg    ! Message for error messages.
+  character(len=512) :: mesg    ! Message for error messages.
 
   call segment_tracer_registry_init(param_file, segment)
 
@@ -4554,7 +4554,7 @@ subroutine mask_outside_OBCs(G, US, param_file, OBC)
   logical :: fatal_error = .False.
   real    :: min_depth
   integer, parameter :: cin = 3, cout = 4, cland = -1, cedge = -2
-  character(len=256) :: mesg    ! Message for error messages.
+  character(len=512) :: mesg    ! Message for error messages.
   type(OBC_segment_type), pointer :: segment => NULL() ! pointer to segment type list
   real, allocatable, dimension(:,:) :: color, color2  ! For sorting inside from outside,
                                                       ! two different ways
