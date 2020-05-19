@@ -3621,6 +3621,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
   real :: tidal_vel, tidal_elev
   real, pointer, dimension(:,:)   :: normal_trans_bt=>NULL() ! barotropic transport
   integer :: turns      ! Number of index quarter turns
+  real, parameter :: PI = 4.0*atan(1.0) ! 3.14159... used for calculating tides
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
@@ -4041,7 +4042,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               ! todo: add period
               if(OBC%add_tidal_harmonics) then
                 tidal_vel = US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,1) * &
-                  sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
+                  sin(2.0*PI*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
               else
                 tidal_vel = 0.0
               endif
@@ -4060,7 +4061,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               ! todo: add period
               if(OBC%add_tidal_harmonics) then
                 tidal_vel = US%m_s_to_L_T*segment%field(segment%vamp_index)%buffer_dst(I,j,1) * &
-                  sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
+                  sin(2.0*PI*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
               else
                 tidal_vel = 0.0
               endif
@@ -4079,7 +4080,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             do J=js_obc,je_obc
               if(OBC%add_tidal_harmonics) then
                 tidal_vel = US%m_s_to_L_T*segment%field(segment%vamp_index)%buffer_dst(I,j,1) * &
-                  sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
+                  sin(2.0*PI*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
               else
                 tidal_vel = 0.0
               endif
@@ -4094,7 +4095,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             J=js_obc
             if(OBC%add_tidal_harmonics) then
               tidal_vel = US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,1) * &
-                  sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
+                  sin(2.0*PI*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
             else
               tidal_vel = 0.0
             endif
@@ -4152,7 +4153,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             do i=is_obc2,ie_obc
               if(OBC%add_tidal_harmonics) then
                 tidal_elev = segment%field(segment%zamp_index)%buffer_dst(i,j,1) * &
-                  sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%zphase_index)%buffer_dst(i,j,1))
+                  sin(2.0*PI*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%zphase_index)%buffer_dst(i,j,1))
               else
                 tidal_elev = 0.0
               endif
@@ -4164,7 +4165,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             do i=is_obc2,ie_obc
               if(OBC%add_tidal_harmonics) then
                 tidal_elev = segment%field(segment%zamp_index)%buffer_dst(i,j,1) * &
-                  sin(2.0*3.14159*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%zphase_index)%buffer_dst(i,j,1))
+                  sin(2.0*PI*time_type_to_real(Time)/(12.0*3600.0) - segment%field(segment%zphase_index)%buffer_dst(i,j,1))
               else
                 tidal_elev = 0.0
               endif
