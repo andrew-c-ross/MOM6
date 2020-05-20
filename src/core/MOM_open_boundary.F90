@@ -22,7 +22,7 @@ use MOM_restart,              only : register_restart_field, register_restart_pa
 use MOM_restart,              only : query_initialized, MOM_restart_CS
 use MOM_obsolete_params,      only : obsolete_logical, obsolete_int, obsolete_real, obsolete_char
 use MOM_string_functions,     only : extract_word, remove_spaces
-use MOM_time_manager,         only : time_type, time_type_to_real, operator(-)
+use MOM_time_manager,         only : set_date, time_type, time_type_to_real, operator(-)
 use MOM_tracer_registry,      only : tracer_type, tracer_registry_type, tracer_name_lookup
 use time_interp_external_mod, only : init_external_field, time_interp_external
 use time_interp_external_mod, only : time_interp_external_init
@@ -4042,7 +4042,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               ! todo: add period
               if(OBC%add_tidal_harmonics) then
                 tidal_vel = US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,1) * &
-                  cos(TWOPI*time_type_to_real(Time)/OBC%tidal_periods(1) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
+                  cos(TWOPI*(time_type_to_real(Time) - time_type_to_real(set_date(1992,1,1)))/OBC%tidal_periods(1) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
               else
                 tidal_vel = 0.0
               endif
@@ -4061,7 +4061,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               ! todo: add period
               if(OBC%add_tidal_harmonics) then
                 tidal_vel = US%m_s_to_L_T*segment%field(segment%vamp_index)%buffer_dst(I,j,1) * &
-                  cos(TWOPI*time_type_to_real(Time)/OBC%tidal_periods(1) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
+                  cos(TWOPI*(time_type_to_real(Time) - time_type_to_real(set_date(1992,1,1)))/OBC%tidal_periods(1) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
               else
                 tidal_vel = 0.0
               endif
@@ -4080,7 +4080,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             do J=js_obc,je_obc
               if(OBC%add_tidal_harmonics) then
                 tidal_vel = US%m_s_to_L_T*segment%field(segment%vamp_index)%buffer_dst(I,j,1) * &
-                  cos(TWOPI*time_type_to_real(Time)/OBC%tidal_periods(1) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
+                  cos(TWOPI*(time_type_to_real(Time) - time_type_to_real(set_date(1992,1,1)))/OBC%tidal_periods(1) - segment%field(segment%vphase_index)%buffer_dst(I,j,1))
               else
                 tidal_vel = 0.0
               endif
@@ -4095,7 +4095,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             J=js_obc
             if(OBC%add_tidal_harmonics) then
               tidal_vel = US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,1) * &
-                  cos(TWOPI*time_type_to_real(Time)/OBC%tidal_periods(1) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
+                  cos(TWOPI*(time_type_to_real(Time) - time_type_to_real(set_date(1992,1,1)))/OBC%tidal_periods(1) - segment%field(segment%uphase_index)%buffer_dst(I,j,1))
             else
               tidal_vel = 0.0
             endif
@@ -4153,7 +4153,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             do i=is_obc2,ie_obc
               if(OBC%add_tidal_harmonics) then
                 tidal_elev = segment%field(segment%zamp_index)%buffer_dst(i,j,1) * &
-                  cos(TWOPI*time_type_to_real(Time)/OBC%tidal_periods(1) - segment%field(segment%zphase_index)%buffer_dst(i,j,1))
+                  cos(TWOPI*(time_type_to_real(Time) - time_type_to_real(set_date(1992,1,1)))/OBC%tidal_periods(1) - segment%field(segment%zphase_index)%buffer_dst(i,j,1))
               else
                 tidal_elev = 0.0
               endif
@@ -4165,7 +4165,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             do i=is_obc2,ie_obc
               if(OBC%add_tidal_harmonics) then
                 tidal_elev = segment%field(segment%zamp_index)%buffer_dst(i,j,1) * &
-                  cos(TWOPI*time_type_to_real(Time)/OBC%tidal_periods(1) - segment%field(segment%zphase_index)%buffer_dst(i,j,1))
+                  cos(TWOPI*(time_type_to_real(Time) - time_type_to_real(set_date(1992,1,1)))/OBC%tidal_periods(1) - segment%field(segment%zphase_index)%buffer_dst(i,j,1))
               else
                 tidal_elev = 0.0
               endif
