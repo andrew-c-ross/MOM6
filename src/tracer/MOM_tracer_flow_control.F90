@@ -138,7 +138,7 @@ end subroutine call_tracer_flux_init
 
 !> This subroutine determines which tracer packages are to be used and does the calls to
 !! register their tracers to be advected, diffused, and read from restarts.
-subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
+subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS, OBC)
   type(hor_index_type),         intent(in) :: HI         !< A horizontal index type structure.
   type(verticalGrid_type),      intent(in) :: GV         !< The ocean's vertical grid structure.
   type(unit_scale_type),        intent(in) :: US         !< A dimensional unit scaling type
@@ -151,7 +151,10 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
                                                          !! advection and diffusion module.
   type(MOM_restart_CS),         pointer    :: restart_CS !< A pointer to the restart control
                                                          !! structure.
-
+  type(ocean_OBC_type),         pointer    :: OBC        !< This open boundary condition
+                                                         !! type specifies whether, where,
+                                                         !! and what open boundary
+                                                         !! conditions are used.
 
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
@@ -239,7 +242,8 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
                         tr_Reg, restart_CS)
   if (CS%use_MOM_generic_tracer) CS%use_MOM_generic_tracer = &
     register_MOM_generic_tracer(HI, GV, param_file,  CS%MOM_generic_tracer_CSp, &
-                                tr_Reg, restart_CS)
+                                tr_Reg, restart_CS, OBC)
+#endif
   if (CS%use_pseudo_salt_tracer) CS%use_pseudo_salt_tracer = &
     register_pseudo_salt_tracer(HI, GV, param_file,  CS%pseudo_salt_tracer_CSp, &
                                 tr_Reg, restart_CS)
@@ -317,7 +321,7 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
     call initialize_OCMIP2_CFC(restart, day, G, GV, US, h, diag, OBC, CS%OCMIP2_CFC_CSp, &
                                 sponge_CSp)
   if (CS%use_MOM_generic_tracer) &
-    call initialize_MOM_generic_tracer(restart, day, G, GV, US, h, param_file, diag, OBC, &
+    call initialize_MOM_generic_tracer(restart, day, G, GV, US, h, param_file, diag, &
         CS%MOM_generic_tracer_CSp, sponge_CSp, ALE_sponge_CSp)
   if (CS%use_pseudo_salt_tracer) &
     call initialize_pseudo_salt_tracer(restart, day, G, GV, h, diag, OBC, CS%pseudo_salt_tracer_CSp, &

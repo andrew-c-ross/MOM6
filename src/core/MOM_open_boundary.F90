@@ -56,7 +56,9 @@ public segment_tracer_registry_init
 public segment_tracer_registry_end
 public register_segment_tracer
 public register_temp_salt_segments
+public register_obgc_segments
 public fill_temp_salt_segments
+public fill_obgc_segments
 public open_boundary_register_restarts
 public update_segment_tracer_reservoirs
 public update_OBC_ramp
@@ -1473,6 +1475,13 @@ end subroutine parse_segment_str
           endif
         endif
         if (fields(m) == 'SALT') then
+          if (segment%is_E_or_W_2) then
+            OBC%tracer_x_reservoirs_used(2) = .true.
+          else
+            OBC%tracer_y_reservoirs_used(2) = .true.
+          endif
+        endif
+        if (fields(m) == 'gtr1') then
           if (segment%is_E_or_W_2) then
             OBC%tracer_x_reservoirs_used(2) = .true.
           else
@@ -3281,6 +3290,22 @@ function lookup_seg_field(OBC_seg,field)
 
 end function lookup_seg_field
 
+!> Return the tracer index from its name
+function get_tracer_index(OBC_seg,tr_name)
+  type(OBC_segment_type), pointer :: OBC_seg !< OBC segment
+  character(len=*), intent(in) :: tr_name   !< The field name
+  integer :: get_tracer_index, it
+  get_tracer_index=-1
+  it=1
+  do while(allocated(OBC_seg%tr_Reg%Tr(it)%t))
+    if (trim(OBC_seg%tr_Reg%Tr(it)%name) == trim(tr_name)) then
+      get_tracer_index=it
+      exit
+    endif
+    it=it+1
+  enddo 
+  return 
+end function get_tracer_index
 
 !> Allocate segment data fields
 subroutine allocate_OBC_segment_data(OBC, segment)
@@ -3523,7 +3548,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
   type(time_type),                           intent(in)    :: Time !< Model time
   ! Local variables
   integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed
-  integer :: IsdB, IedB, JsdB, JedB, n, m, nz
+  integer :: IsdB, IedB, JsdB, JedB, n, m, nz, nt, it
   character(len=40)  :: mdl = "set_OBC_segment_data" ! This subroutine's name.
   character(len=200) :: filename, OBC_file, inputdir ! Strings for file/path
   type(OBC_segment_type), pointer :: segment => NULL()
@@ -4075,6 +4100,25 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
         else
           segment%tr_Reg%Tr(2)%OBC_inflow_conc = segment%field(m)%value
         endif
+      elseif (trim(segment%field(m)%name) == 'gtr1') then
+        nt=get_tracer_index(segment,'gtr1')
+        if(nt .lt. 0) then
+          call MOM_error(FATAL,"update_OBC_segment_data: Did not find tracer gtr1!")
+        endif
+        if (associated(segment%field(m)%buffer_dst)) then
+          do k=1,nz; do j=js_obc2, je_obc; do i=is_obc2,ie_obc
+            segment%tr_Reg%Tr(nt)%t(i,j,k) = segment%field(m)%buffer_dst(i,j,k)
+          enddo ; enddo ; enddo
+          if (.not. segment%tr_Reg%Tr(nt)%is_initialized) then
+            !if the tracer reservoir has not yet been initialized, then set to external value.
+            do k=1,nz; do j=js_obc2, je_obc; do i=is_obc2,ie_obc
+              segment%tr_Reg%Tr(nt)%tres(i,j,k) = segment%tr_Reg%Tr(nt)%t(i,j,k)
+            enddo ; enddo ; enddo
+            segment%tr_Reg%Tr(nt)%is_initialized=.true.
+          endif
+        else
+          segment%tr_Reg%Tr(nt)%OBC_inflow_conc = segment%field(m)%value
+        endif
       endif
 
     enddo ! end field loop
@@ -4350,6 +4394,91 @@ subroutine register_temp_salt_segments(GV, OBC, tr_Reg, param_file)
   enddo
 
 end subroutine register_temp_salt_segments
+
+subroutine register_obgc_segments(GV, OBC, tr_Reg, param_file, tr_name)
+  type(verticalGrid_type),    intent(in)    :: GV         !< ocean vertical grid structure
+  type(ocean_OBC_type),       pointer       :: OBC        !< Open boundary structure
+  type(tracer_registry_type), pointer       :: tr_Reg     !< Tracer registry
+  type(param_file_type),      intent(in)    :: param_file !< file to parse for  model parameter values
+  character(len=*),           intent(in)    :: tr_name!< Tracer name
+! Local variables
+  integer :: isd, ied, IsdB, IedB, jsd, jed, JsdB, JedB, nz, nf
+  integer :: i, j, k, n
+  type(OBC_segment_type), pointer :: segment => NULL() ! pointer to segment type list
+  type(tracer_type), pointer      :: tr_ptr => NULL()
+
+  if (.not. associated(OBC)) return
+
+  do n=1, OBC%number_of_segments
+    segment=>OBC%segment(n)
+    if (.not. segment%on_pe) cycle
+    !For testing activate only one particular tracer for OBC
+    !This could be later generalized to all or a list of tracers
+    if(trim(tr_name) == 'gtr1') then 
+      call tracer_name_lookup(tr_Reg, tr_ptr, tr_name)
+      call register_segment_tracer(tr_ptr, param_file, GV, segment, OBC_array=.True.)
+    endif
+  enddo
+
+end subroutine register_obgc_segments
+
+subroutine fill_obgc_segments(G, OBC, tr_ptr, tr_name)
+  type(ocean_grid_type),      intent(inout) :: G      !< Ocean grid structure
+  type(ocean_OBC_type),       pointer       :: OBC    !< Open boundary structure
+  real, dimension(:,:,:),     pointer       :: tr_ptr !< Pointer to tracer field
+  character(len=*),           intent(in)    :: tr_name!< Tracer name
+
+! Local variables
+  integer :: isd, ied, IsdB, IedB, jsd, jed, JsdB, JedB, n, nz, nt
+  integer :: i, j, k
+  type(OBC_segment_type), pointer :: segment => NULL() ! pointer to segment type list
+
+  if (.not. associated(OBC)) return
+
+  if(trim(tr_name) /= 'gtr1') return !Test for one particular tracer 
+
+  call pass_var(tr_ptr, G%Domain)
+
+  nz = G%ke
+
+  do n=1, OBC%number_of_segments
+    segment => OBC%segment(n)
+    if (.not. segment%on_pe) cycle
+
+    nt=get_tracer_index(segment,tr_name)
+    if(nt .lt. 0) then
+      call MOM_error(FATAL,"fill_obgc_segments: Did not find tracer "// tr_name)
+    endif
+
+    isd = segment%HI%isd ; ied = segment%HI%ied
+    jsd = segment%HI%jsd ; jed = segment%HI%jed
+    IsdB = segment%HI%IsdB ; IedB = segment%HI%IedB
+    JsdB = segment%HI%JsdB ; JedB = segment%HI%JedB
+
+    ! Fill with Tracer values
+    if (segment%is_E_or_W) then
+      I=segment%HI%IsdB
+      do k=1,nz ; do j=segment%HI%jsd,segment%HI%jed
+        if (segment%direction == OBC_DIRECTION_W) then
+          segment%tr_Reg%Tr(nt)%t(I,j,k) = tr_ptr(i+1,j,k)
+        else
+          segment%tr_Reg%Tr(nt)%t(I,j,k) = tr_ptr(i,j,k)
+        endif
+      enddo ; enddo
+    else
+      J=segment%HI%JsdB
+      do k=1,nz ; do i=segment%HI%isd,segment%HI%ied
+        if (segment%direction == OBC_DIRECTION_S) then
+          segment%tr_Reg%Tr(nt)%t(i,J,k) = tr_ptr(i,j+1,k)
+        else
+          segment%tr_Reg%Tr(nt)%t(i,J,k) = tr_ptr(i,j,k)
+        endif
+      enddo ; enddo
+    endif
+    segment%tr_Reg%Tr(nt)%tres(:,:,:) = segment%tr_Reg%Tr(nt)%t(:,:,:)
+  enddo
+  call setup_OBC_tracer_reservoirs(G, OBC) !This will redo the T&S
+end subroutine fill_obgc_segments
 
 subroutine fill_temp_salt_segments(G, OBC, tv)
   type(ocean_grid_type),      intent(in)    :: G          !< Ocean grid structure

@@ -2290,7 +2290,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   ! This subroutine calls user-specified tracer registration routines.
   ! Additional calls can be added to MOM_tracer_flow_control.F90.
   call call_tracer_register(dG%HI, GV, US, param_file, CS%tracer_flow_CSp, &
-                            CS%tracer_Reg, restart_CSp)
+                            CS%tracer_Reg, restart_CSp, CS%OBC)
 
   call MEKE_alloc_register_restart(dG%HI, param_file, CS%MEKE, restart_CSp)
   call set_visc_register_restarts(dG%HI, GV, param_file, CS%visc, restart_CSp)

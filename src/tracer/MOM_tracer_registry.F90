@@ -847,6 +847,7 @@ subroutine tracer_name_lookup(Reg, tr_ptr, name)
   character(len=32), intent(in)          :: name    !< tracer name
 
   integer n
+  tr_ptr => null()
   do n=1,Reg%ntr
     if (lowercase(Reg%Tr(n)%name) == lowercase(name)) tr_ptr => Reg%Tr(n)
   enddo
