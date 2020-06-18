@@ -10,7 +10,7 @@ use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser,   only : get_param, log_version, param_file_type
 use MOM_grid,          only : ocean_grid_type
 use MOM_io,            only : field_exists, file_exists, MOM_read_data
-use MOM_time_manager,  only : time_type, time_type_to_real
+use MOM_time_manager,  only : set_date, time_type, time_type_to_real, operator(-)
 
 implicit none ; private
 
@@ -42,7 +42,8 @@ type, public :: tidal_forcing_CS ; private
     love_no           !< The Love number of a tidal constituent at time 0 [nondim].
   integer :: struct(MAX_CONSTITUENTS) !< An encoded spatial structure for each constituent
   character (len=16) :: const_name(MAX_CONSTITUENTS) !< The name of each constituent
-
+  real :: time_ref
+  real, dimension(3) :: astro_shp
   real, pointer, dimension(:,:,:) :: &
     sin_struct => NULL(), &    !< The sine and cosine based structures that can
     cos_struct => NULL(), &    !< be associated with the astronomical forcing.
@@ -57,6 +58,57 @@ end type tidal_forcing_CS
 integer :: id_clock_tides !< CPU clock for tides
 
 contains
+
+subroutine astro_longitudes_init(Time, time_ref, longitudes_shp)
+  type(time_type), intent(in) :: Time
+  real, dimension(3), intent(out) :: longitudes_shp
+  real, intent(out) :: time_ref
+  real :: D, T
+  real, parameter :: PI = 4.0*atan(1.0) ! 3.14159... 
+  ! todo: make this setable in MOM_input with reasonable default
+  ! current choice to set as model initial time could cause problems when restarting?
+  ! also, needs to be at midnight
+  time_ref = time_type_to_real(Time)
+  ! round down to nearest day
+  time_ref = time_ref - mod(time_ref, 24.0*3600.0)
+  ! Time in Julian days since 1975-01-01, starting at 1
+  D = 1 + (time_type_to_real(Time) - time_type_to_real(set_date(1975, 1, 1))) / (24.0 * 3600.0)
+  ! Approximately Julian centuries
+  T = (27392.500528 + 1.0000000356 * D) / 36525.0
+  ! s: Mean longitude of moon
+  longitudes_shp(1) = 270.434358 + 481267.88314137 * T - 0.001133 * (T**2) + 1.9e-6 * (T**3)
+  ! h: Mean longitude of sun
+  longitudes_shp(2) = 279.69668 + 36000.768930485 * T + 3.03e-4*(T**2)
+  ! p: Mean longitude of lunar perigee
+  longitudes_shp(3) = 334.329653 + 4069.0340329575 * T - 0.010325 * (T ** 2) - 1.2e-5 * (T**3)
+  ! Convert to radians on [0, 2pi)
+  longitudes_shp = mod(longitudes_shp, 360.0) * PI / 180.0
+
+end subroutine astro_longitudes_init
+
+function eq_phase(constit, shp)
+  character (len=2), intent(in) :: constit
+  real, dimension(3), intent(in) :: shp
+  real :: s, h, p
+  real :: eq_phase
+
+  s = shp(1)
+  h = shp(2)
+  p = shp(3)
+
+  select case (constit)
+    case ('M2')
+      eq_phase = 2 * (h - s)
+
+    case ('S2')
+      eq_phase = 0.0
+
+    case default
+      eq_phase = 0.0 ! should be an error
+
+  end select
+
+end function eq_phase
 
 !> This subroutine allocates space for the static variables used
 !! by this module.  The metrics may be effectively 0, 1, or 2-D arrays,
@@ -214,19 +266,24 @@ subroutine tidal_forcing_init(Time, G, param_file, CS)
   endif
 
   ! Set the parameters for all components that are in use.
+
+  ! Initialize reference time for tides and 
+  ! find relevant lunar and solar longitudes at the reference time
+  call astro_longitudes_init(Time, CS%time_ref, CS%astro_shp)
+
   c=0
   if (use_M2) then
     c=c+1 ; CS%const_name(c) = "M2" ; CS%freq(c) = 1.4051890e-4 ; CS%struct(c) = 2
     CS%love_no(c) = 0.693 ; CS%amp(c) = 0.242334 ; CS%phase0(c) = 0.0
     freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
+    amp_def(c) = CS%amp(c) ; phase0_def(c) = eq_phase('M2', CS%astro_shp)
   endif
 
   if (use_S2) then
     c=c+1 ; CS%const_name(c) = "S2" ; CS%freq(c) = 1.4544410e-4 ; CS%struct(c) = 2
     CS%love_no(c) = 0.693 ; CS%amp(c) = 0.112743 ; CS%phase0(c) = 0.0
     freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
+    amp_def(c) = CS%amp(c) ; phase0_def(c) = eq_phase('S2', CS%astro_shp)  ! will normally be 0 because ref time is midnight
   endif
 
   if (use_N2) then
@@ -411,8 +468,6 @@ subroutine calc_tidal_forcing(Time, eta, eta_tidal, G, CS, deta_tidal_deta, m_to
   real, optional,                   intent(in)  :: m_to_Z    !< A scaling factor from m to the units of eta.
 
   ! Local variables
-  real :: eta_astro(SZI_(G),SZJ_(G))
-  real :: eta_SAL(SZI_(G),SZJ_(G))
   real :: now       ! The relative time in seconds.
   real :: amp_cosomegat, amp_sinomegat
   real :: cosomegat, sinomegat
@@ -431,7 +486,7 @@ subroutine calc_tidal_forcing(Time, eta, eta_tidal, G, CS, deta_tidal_deta, m_to
     return
   endif
 
-  now = time_type_to_real(Time)
+  now = time_type_to_real(Time) - cs%time_ref
 
   if (CS%USE_SAL_SCALAR .and. CS%USE_PREV_TIDES) then
     eta_prop = 2.0*CS%SAL_SCALAR
