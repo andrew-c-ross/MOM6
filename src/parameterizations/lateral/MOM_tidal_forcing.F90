@@ -6,7 +6,7 @@ module MOM_tidal_forcing
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end, &
                               CLOCK_MODULE
 use MOM_domains,       only : pass_var
-use MOM_error_handler, only : MOM_error, FATAL, WARNING
+use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING
 use MOM_file_parser,   only : get_param, log_version, param_file_type
 use MOM_grid,          only : ocean_grid_type
 use MOM_io,            only : field_exists, file_exists, MOM_read_data
@@ -31,6 +31,10 @@ type, public :: tidal_forcing_CS ; private
                       !! by TIDAL_INPUT_FILE.
   logical :: use_prev_tides !< If true, use the SAL from the previous
                       !! iteration of the tides to facilitate convergence.
+  logical :: use_eq_phase !< If true, tidal forcing is phase-shifted to match 
+                      !! equilibrium tide. Set to false if providing tidal phases
+                      !! that have already been shifted by the
+                      !! astronomical/equilibrium argument.
   real    :: sal_scalar !< The constant of proportionality between sea surface
                       !! height (really it should be bottom pressure) anomalies
                       !! and bottom geopotential anomalies.
@@ -59,20 +63,24 @@ integer :: id_clock_tides !< CPU clock for tides
 
 contains
 
-subroutine astro_longitudes_init(Time, time_ref, longitudes_shp)
-  type(time_type), intent(in) :: Time
+!> Finds astronomical longitudes s, h, and p, 
+!! the mean longitude of the moon, sun, and lunar perigee, respectively,
+!! at the specified reference time time_ref.
+!! These formulas were obtained from
+!! Ernst W. Schwiderski (1980) Ocean tides, part I: Global ocean tidal equations, 
+!! Marine Geodesy, 3:1-4, 161-217, DOI: 10.1080/01490418009387997.
+!! For simplicity, the time associated with time_ref should 
+!! be at midnight, and will be rounded down to midnight
+!! if it is not. 
+subroutine astro_longitudes_init(time_ref, longitudes_shp)
   real, dimension(3), intent(out) :: longitudes_shp
-  real, intent(out) :: time_ref
+  real, intent(inout) :: time_ref
   real :: D, T
   real, parameter :: PI = 4.0*atan(1.0) ! 3.14159... 
-  ! todo: make this setable in MOM_input with reasonable default
-  ! current choice to set as model initial time could cause problems when restarting?
-  ! also, needs to be at midnight
-  time_ref = time_type_to_real(Time)
-  ! round down to nearest day
+  ! time ref needs to be at midnight, so round down to nearest day
   time_ref = time_ref - mod(time_ref, 24.0*3600.0)
   ! Time in Julian days since 1975-01-01, starting at 1
-  D = 1 + (time_type_to_real(Time) - time_type_to_real(set_date(1975, 1, 1))) / (24.0 * 3600.0)
+  D = 1 + (time_ref - time_type_to_real(set_date(1975, 1, 1))) / (24.0 * 3600.0)
   ! Approximately Julian centuries
   T = (27392.500528 + 1.0000000356 * D) / 36525.0
   ! s: Mean longitude of moon
@@ -83,13 +91,16 @@ subroutine astro_longitudes_init(Time, time_ref, longitudes_shp)
   longitudes_shp(3) = 334.329653 + 4069.0340329575 * T - 0.010325 * (T ** 2) - 1.2e-5 * (T**3)
   ! Convert to radians on [0, 2pi)
   longitudes_shp = mod(longitudes_shp, 360.0) * PI / 180.0
-
 end subroutine astro_longitudes_init
 
+!> Calculates the equilibrium phase argument for 
+!! the given tidal harmonic constituent constit
+!! given the array of longitudes shp.
 function eq_phase(constit, shp)
   character (len=2), intent(in) :: constit
   real, dimension(3), intent(in) :: shp
   real :: s, h, p
+  real, parameter :: PI = 4.0*atan(1.0) ! 3.14159...
   real :: eq_phase
 
   s = shp(1)
@@ -97,17 +108,27 @@ function eq_phase(constit, shp)
   p = shp(3)
 
   select case (constit)
-    case ('M2')
+    case ("M2")
       eq_phase = 2 * (h - s)
-
-    case ('S2')
+    case ("S2")
       eq_phase = 0.0
-
+    case ("N2")
+      eq_phase = 2 * h - 3 * s + p
+    case ("K2")
+      eq_phase = 2 * h
+    case("K1")
+      eq_phase = h + PI / 2.0
+    case("P1")
+      eq_phase = -h - PI / 2.0
+    case("Q1")
+      eq_phase = h - 3 * s + p - PI / 2.0
+    case("MF")
+      eq_phase = 2 * s
+    case("MM")
+      eq_phase = s - p
     case default
-      eq_phase = 0.0 ! should be an error
-
+      call MOM_error(FATAL, "eq_phase: unrecognized constituent")
   end select
-
 end function eq_phase
 
 !> This subroutine allocates space for the static variables used
@@ -127,6 +148,7 @@ subroutine tidal_forcing_init(Time, G, param_file, CS)
     lat_rad, lon_rad  ! Latitudes and longitudes of h-points in radians.
   real :: deg_to_rad
   real, dimension(MAX_CONSTITUENTS) :: freq_def, phase0_def, amp_def, love_def
+  integer, dimension(3) :: tide_ref_date
   logical :: use_const  ! True if a constituent is being used.
   logical :: use_M2, use_S2, use_N2, use_K2, use_K1, use_O1, use_P1, use_Q1
   logical :: use_MF, use_MM
@@ -265,84 +287,105 @@ subroutine tidal_forcing_init(Time, G, param_file, CS)
                    default = "", fail_if_missing=.true.)
   endif
 
+  call get_param(param_file, mdl, "TIDE_REF_DATE", tide_ref_date, &
+                 "Year,month,day to use as reference date for tidal forcing "//&
+                 "phase corrections. If not specified, defaults to the model initialization day", &
+                 default=0) 
+
+  call get_param(param_file, mdl, "TIDE_USE_EQ_PHASE", CS%use_eq_phase, &
+                   "A list of input files for tidal information.",         &
+                   default = .true., fail_if_missing=.false.)
+
+  if (sum(tide_ref_date) == 0) then  ! tide_ref_date defaults to model initial time
+    CS%time_ref = time_type_to_real(Time)
+    if(CS%use_eq_phase) then
+      ! Using equilibrium phase and model initialization date as reference date.
+      ! This makes sense as long as phases are not overridden. 
+      ! If phases are overridden, they should still be relative to reference/initialization date.
+      call MOM_mesg('Tides will be corrected for equilibrium phases based on model initial condition date.')
+    endif
+  else
+    if(.not. CS%use_eq_phase) then
+      ! Using a reference date but not using phase relative to equilibrium.
+      ! This makes sense as long as either phases are overridden, or
+      ! correctly simulating tidal phases is not desired.
+      call MOM_mesg('Tidal phases will *not* be corrected with equilibrium arguments.')
+    endif 
+    CS%time_ref = time_type_to_real(set_date(tide_ref_date(1), tide_ref_date(2), tide_ref_date(3)))
+    !CS%time_ref = time_type_to_real(set_date(1992, 1, 1))
+  endif
+
+
   ! Set the parameters for all components that are in use.
 
   ! Initialize reference time for tides and 
   ! find relevant lunar and solar longitudes at the reference time
-  call astro_longitudes_init(Time, CS%time_ref, CS%astro_shp)
+  if (CS%use_eq_phase) call astro_longitudes_init(CS%time_ref, CS%astro_shp)
 
   c=0
   if (use_M2) then
     c=c+1 ; CS%const_name(c) = "M2" ; CS%freq(c) = 1.4051890e-4 ; CS%struct(c) = 2
     CS%love_no(c) = 0.693 ; CS%amp(c) = 0.242334 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = eq_phase('M2', CS%astro_shp)
   endif
 
   if (use_S2) then
     c=c+1 ; CS%const_name(c) = "S2" ; CS%freq(c) = 1.4544410e-4 ; CS%struct(c) = 2
     CS%love_no(c) = 0.693 ; CS%amp(c) = 0.112743 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = eq_phase('S2', CS%astro_shp)  ! will normally be 0 because ref time is midnight
   endif
 
   if (use_N2) then
     c=c+1 ; CS%const_name(c) = "N2" ; CS%freq(c) = 1.3787970e-4 ; CS%struct(c) = 2
     CS%love_no(c) = 0.693 ; CS%amp(c) = 0.046397 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
   endif
 
   if (use_K2) then
     c=c+1 ; CS%const_name(c) = "K2" ; CS%freq(c) = 1.4584234e-4 ; CS%struct(c) = 2
     CS%love_no(c) = 0.693 ; CS%amp(c) = 0.030684 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
   endif
 
   if (use_K1) then
     c=c+1 ; CS%const_name(c) = "K1" ; CS%freq(c) = 0.7292117e-4 ; CS%struct(c) = 1
     CS%love_no(c) = 0.736 ; CS%amp(c) = 0.141565 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
   endif
 
   if (use_O1) then
     c=c+1 ; CS%const_name(c) = "O1" ; CS%freq(c) = 0.6759774e-4 ; CS%struct(c) = 1
     CS%love_no(c) = 0.695 ; CS%amp(c) = 0.100661 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
   endif
 
   if (use_P1) then
     c=c+1 ; CS%const_name(c) = "P1" ; CS%freq(c) = 0.7252295e-4 ; CS%struct(c) = 1
     CS%love_no(c) = 0.706 ; CS%amp(c) = 0.046848 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
   endif
 
   if (use_Q1) then
     c=c+1 ; CS%const_name(c) = "Q1" ; CS%freq(c) = 0.6495854e-4 ; CS%struct(c) = 1
     CS%love_no(c) = 0.695 ; CS%amp(c) = 0.019273 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
   endif
 
   if (use_MF) then
     c=c+1 ; CS%const_name(c) = "MF" ; CS%freq(c) = 0.053234e-4 ; CS%struct(c) = 3
     CS%love_no(c) = 0.693 ; CS%amp(c) = 0.042041 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
   endif
 
   if (use_MM) then
     c=c+1 ; CS%const_name(c) = "MM" ; CS%freq(c) = 0.026392e-4 ; CS%struct(c) = 3
     CS%love_no(c) = 0.693 ; CS%amp(c) = 0.022191 ; CS%phase0(c) = 0.0
-    freq_def(c) = CS%freq(c) ; love_def(c) = CS%love_no(c)
-    amp_def(c) = CS%amp(c) ; phase0_def(c) = CS%phase0(c)
   endif
 
-  !   Parse the input file to potentially override the default values for the
+  ! Set defaults for all included constituents
+  do c=1,nc
+    freq_def(c) = CS%freq(c) 
+    love_def(c) = CS%love_no(c)
+    amp_def(c) = CS%amp(c)
+    if (CS%use_eq_phase) then
+      phase0_def(c) = eq_phase(CS%const_name(c), CS%astro_shp)
+    else
+      phase0_def(c) = 0.0
+    endif
+  enddo
+
+  !  Parse the input file to potentially override the default values for the
   ! frequency, amplitude and initial phase of each constituent, and log the
   ! values that are actually used.
   do c=1,nc
