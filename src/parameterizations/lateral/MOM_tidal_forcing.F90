@@ -16,6 +16,7 @@ implicit none ; private
 
 public calc_tidal_forcing, tidal_forcing_init, tidal_forcing_end
 public tidal_forcing_sensitivity
+public astro_longitudes_init, eq_phase
 
 #include <MOM_memory.h>
 
@@ -312,7 +313,6 @@ subroutine tidal_forcing_init(Time, G, param_file, CS)
       call MOM_mesg('Tidal phases will *not* be corrected with equilibrium arguments.')
     endif 
     CS%time_ref = time_type_to_real(set_date(tide_ref_date(1), tide_ref_date(2), tide_ref_date(3)))
-    !CS%time_ref = time_type_to_real(set_date(1992, 1, 1))
   endif
 
 
