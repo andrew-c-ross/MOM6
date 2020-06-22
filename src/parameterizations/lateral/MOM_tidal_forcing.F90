@@ -16,7 +16,7 @@ implicit none ; private
 
 public calc_tidal_forcing, tidal_forcing_init, tidal_forcing_end
 public tidal_forcing_sensitivity
-public astro_longitudes_init, eq_phase
+public astro_longitudes_init, eq_phase, tidal_frequency
 
 #include <MOM_memory.h>
 
@@ -87,7 +87,7 @@ subroutine astro_longitudes_init(time_ref, longitudes_shp)
   ! s: Mean longitude of moon
   longitudes_shp(1) = 270.434358 + 481267.88314137 * T - 0.001133 * (T**2) + 1.9e-6 * (T**3)
   ! h: Mean longitude of sun
-  longitudes_shp(2) = 279.69668 + 36000.768930485 * T + 3.03e-4*(T**2)
+  longitudes_shp(2) = 279.69668 + 36000.768930485 * T + 3.03e-4 * (T**2)
   ! p: Mean longitude of lunar perigee
   longitudes_shp(3) = 334.329653 + 4069.0340329575 * T - 0.010325 * (T ** 2) - 1.2e-5 * (T**3)
   ! Convert to radians on [0, 2pi)
@@ -117,20 +117,53 @@ function eq_phase(constit, shp)
       eq_phase = 2 * h - 3 * s + p
     case ("K2")
       eq_phase = 2 * h
-    case("K1")
+    case ("K1")
       eq_phase = h + PI / 2.0
-    case("P1")
+    case("O1")
+      eq_phase = h - 2 * s - PI / 2.0
+    case ("P1")
       eq_phase = -h - PI / 2.0
-    case("Q1")
+    case ("Q1")
       eq_phase = h - 3 * s + p - PI / 2.0
-    case("MF")
+    case ("MF")
       eq_phase = 2 * s
-    case("MM")
+    case ("MM")
       eq_phase = s - p
     case default
       call MOM_error(FATAL, "eq_phase: unrecognized constituent")
   end select
 end function eq_phase
+
+function tidal_frequency(constit)
+  character (len=2), intent(in) :: constit
+  real :: tidal_frequency
+
+  select case (constit)
+    case ("M2")
+      tidal_frequency = 1.4051890e-4
+    case ("S2")
+      tidal_frequency = 1.4544410e-4
+    case ("N2")
+      tidal_frequency = 1.3787970e-4
+    case ("K2")
+      tidal_frequency = 1.4584234e-4
+    case ("K1")
+      tidal_frequency = 0.7292117e-4
+    case ("O1")
+      tidal_frequency = 0.6759774e-4
+    case ("P1")
+      tidal_frequency = 0.7252295e-4
+    case ("Q1")
+      tidal_frequency = 0.6495854e-4
+    case ("MF")
+      tidal_frequency = 0.053234e-4
+    case ("MM")
+      tidal_frequency = 0.026392e-4
+    case default
+      call MOM_error(FATAL, "tidal_frequency: unrecognized constituent")
+  end select
+
+end function tidal_frequency
 
 !> This subroutine allocates space for the static variables used
 !! by this module.  The metrics may be effectively 0, 1, or 2-D arrays,
@@ -324,60 +357,63 @@ subroutine tidal_forcing_init(Time, G, param_file, CS)
 
   c=0
   if (use_M2) then
-    c=c+1 ; CS%const_name(c) = "M2" ; CS%freq(c) = 1.4051890e-4 ; CS%struct(c) = 2
-    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.242334 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "M2" ; CS%struct(c) = 2
+    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.242334
   endif
 
   if (use_S2) then
-    c=c+1 ; CS%const_name(c) = "S2" ; CS%freq(c) = 1.4544410e-4 ; CS%struct(c) = 2
-    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.112743 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "S2" ; CS%struct(c) = 2
+    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.112743
   endif
 
   if (use_N2) then
-    c=c+1 ; CS%const_name(c) = "N2" ; CS%freq(c) = 1.3787970e-4 ; CS%struct(c) = 2
-    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.046397 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "N2" ; CS%struct(c) = 2
+    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.046397
   endif
 
   if (use_K2) then
-    c=c+1 ; CS%const_name(c) = "K2" ; CS%freq(c) = 1.4584234e-4 ; CS%struct(c) = 2
-    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.030684 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "K2" ; CS%struct(c) = 2
+    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.030684
   endif
 
   if (use_K1) then
-    c=c+1 ; CS%const_name(c) = "K1" ; CS%freq(c) = 0.7292117e-4 ; CS%struct(c) = 1
-    CS%love_no(c) = 0.736 ; CS%amp(c) = 0.141565 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "K1" ; CS%struct(c) = 1
+    CS%love_no(c) = 0.736 ; CS%amp(c) = 0.141565
   endif
 
   if (use_O1) then
-    c=c+1 ; CS%const_name(c) = "O1" ; CS%freq(c) = 0.6759774e-4 ; CS%struct(c) = 1
-    CS%love_no(c) = 0.695 ; CS%amp(c) = 0.100661 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "O1" ; CS%struct(c) = 1
+    CS%love_no(c) = 0.695 ; CS%amp(c) = 0.100661
   endif
 
   if (use_P1) then
-    c=c+1 ; CS%const_name(c) = "P1" ; CS%freq(c) = 0.7252295e-4 ; CS%struct(c) = 1
-    CS%love_no(c) = 0.706 ; CS%amp(c) = 0.046848 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "P1" ; CS%struct(c) = 1
+    CS%love_no(c) = 0.706 ; CS%amp(c) = 0.046848
   endif
 
   if (use_Q1) then
-    c=c+1 ; CS%const_name(c) = "Q1" ; CS%freq(c) = 0.6495854e-4 ; CS%struct(c) = 1
-    CS%love_no(c) = 0.695 ; CS%amp(c) = 0.019273 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "Q1" ; CS%struct(c) = 1
+    CS%love_no(c) = 0.695 ; CS%amp(c) = 0.019273
   endif
 
   if (use_MF) then
-    c=c+1 ; CS%const_name(c) = "MF" ; CS%freq(c) = 0.053234e-4 ; CS%struct(c) = 3
-    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.042041 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "MF" ; CS%struct(c) = 3
+    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.042041
   endif
 
   if (use_MM) then
-    c=c+1 ; CS%const_name(c) = "MM" ; CS%freq(c) = 0.026392e-4 ; CS%struct(c) = 3
-    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.022191 ; CS%phase0(c) = 0.0
+    c=c+1 ; CS%const_name(c) = "MM" ; CS%struct(c) = 3
+    CS%love_no(c) = 0.693 ; CS%amp(c) = 0.022191
   endif
 
   ! Set defaults for all included constituents
+  ! and things that can be set by functions
   do c=1,nc
+    CS%freq(c) = tidal_frequency(CS%const_name(c))
     freq_def(c) = CS%freq(c) 
     love_def(c) = CS%love_no(c)
     amp_def(c) = CS%amp(c)
+    CS%phase0(c) = 0.0
     if (CS%use_eq_phase) then
       phase0_def(c) = eq_phase(CS%const_name(c), CS%astro_shp)
     else
