@@ -4133,6 +4133,9 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
                     cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%uphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c) )
                 enddo
               endif
+              if (abs(tidal_vel) > 2) then
+                write(*, *) 'Large tidal U velocity'
+              endif
               do k=1,G%ke
                 segment%normal_vel(I,j,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(I,j,k) + tidal_vel
                 segment%normal_trans(I,j,k) = segment%normal_vel(I,j,k)*segment%h(I,j,k) * G%dyCu(I,j)
@@ -4151,6 +4154,9 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
                   tidal_vel = US%m_s_to_L_T*segment%field(segment%vamp_index)%buffer_dst(I,j,c) * &
                     cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%vphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c))
                 enddo
+              endif
+              if(abs(tidal_vel) > 2) then
+                write(*, *) 'Large tidal V velocity'
               endif
               do k=1,G%ke
                 segment%normal_vel(i,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(i,J,k) + tidal_vel
@@ -4172,6 +4178,9 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
                     cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%vphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c))
                 enddo
               endif
+              if(abs(tidal_vel) > 2) then
+                write(*, *) 'Large tidal V velocity'
+              endif
               do k=1,G%ke
                 segment%tangential_vel(I,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(I,J,k) + tidal_vel
               enddo
@@ -4188,6 +4197,9 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
                   cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%uphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c))
               enddo
             endif
+            if(abs(tidal_vel) > 2) then
+                write(*, *) 'Large tidal U velocity'
+              endif
             do I=is_obc,ie_obc
               do k=1,G%ke
                 segment%tangential_vel(I,J,k) = US%m_s_to_L_T*segment%field(m)%buffer_dst(I,J,k) + tidal_vel
@@ -4243,9 +4255,12 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               tidal_elev = 0.0
               if(OBC%add_tide_harmonics) then 
                 do c=1,OBC%n_tide_harmonics
-                  tidal_elev = segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
+                  tidal_elev = tidal_elev + segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
                     cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%zphase_index)%buffer_dst(i,j,c) + OBC%tide_eq_phases(c))
                 enddo
+              endif
+              if(abs(tidal_elev) > 2) then
+                write(*, *) 'Large tidal elevation'
               endif
               segment%eta(i,j) = OBC%ramp_value * (segment%field(m)%buffer_dst(i,j,1) + tidal_elev)
             enddo
@@ -4256,9 +4271,12 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               tidal_elev = 0.0
               if(OBC%add_tide_harmonics) then 
                 do c=1,OBC%n_tide_harmonics
-                  tidal_elev = segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
+                  tidal_elev = tidal_elev + segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
                     cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%zphase_index)%buffer_dst(i,j,c) + OBC%tide_eq_phases(c))
                 enddo
+              endif
+              if(abs(tidal_elev) > 2) then
+                write(*, *) 'Large tidal elevation'
               endif
               segment%eta(i,j) = segment%field(m)%buffer_dst(i,j,1) + tidal_elev
             enddo
