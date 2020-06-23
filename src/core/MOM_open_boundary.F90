@@ -982,12 +982,6 @@ subroutine initialize_obc_tides(OBC, tide_ref_date, tide_constituent_str)
       OBC%tide_eq_phases(c) = 0.0
     endif
   enddo
-
-  ! todo: delete after debugging
-  write(*,*) 'Frequencies:'
-  write(*,*) OBC%tide_frequencies
-  write(*,*) 'phases:'
-  write(*,*) OBC%tide_eq_phases
   
 end subroutine initialize_obc_tides
 
@@ -3855,8 +3849,11 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
         else
           tmp_buffer_in => tmp_buffer
         endif
-
-        call time_interp_external(segment%field(m)%fid,Time, tmp_buffer_in)
+        
+        ! try skipping time interpolation for tides
+        if (index(segment%field(m)%name, 'phase') .le. 0 .or. index(segment%field(m)%name, 'amp') .le. 0) then
+          call time_interp_external(segment%field(m)%fid,Time, tmp_buffer_in)
+        endif 
         ! NOTE: Rotation of face-points require that we skip the final value
         if (turns /= 0) then
           ! TODO: This is hardcoded for 90 degrees, and needs to be generalized.
