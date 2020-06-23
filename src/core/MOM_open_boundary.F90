@@ -963,7 +963,6 @@ subroutine initialize_obc_tides(OBC, tide_ref_date, tide_constituent_str)
   integer :: c
 
   allocate(OBC%tide_names(OBC%n_tide_harmonics))
-  ! todo: this will probably be part of OBC type
   read(tide_constituent_str, *) OBC%tide_names
 
   OBC%time_ref = time_type_to_real(set_date(tide_ref_date(1), tide_ref_date(2), tide_ref_date(3)))
@@ -977,7 +976,6 @@ subroutine initialize_obc_tides(OBC, tide_ref_date, tide_constituent_str)
 
   do c=1,OBC%n_tide_harmonics
     OBC%tide_frequencies(c) = tidal_frequency(trim(OBC%tide_names(c)))
-    ! todo: set equilibrium phase
     if (OBC%add_eq_phase) then
       OBC%tide_eq_phases(c) = eq_phase(trim(OBC%tide_names(c)), OBC%astro_shp)
     else
@@ -4131,7 +4129,6 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             I=is_obc
             do j=js_obc+1,je_obc
               normal_trans_bt(I,j) = 0.0
-              ! todo: add period
               tidal_vel = 0.0
               if(OBC%add_tide_harmonics) then  
                 do c=1,OBC%n_tide_harmonics
@@ -4151,7 +4148,6 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             J=js_obc
             do i=is_obc+1,ie_obc
               normal_trans_bt(i,J) = 0.0
-              ! todo: add period
               tidal_vel = 0.0
               if(OBC%add_tide_harmonics) then
                 do c=1,OBC%n_tide_harmonics
