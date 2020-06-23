@@ -3797,9 +3797,9 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             if (segment%is_E_or_W) then
               if (segment%field(m)%name == 'V' .or. segment%field(m)%name == 'DVDX' .or. &
                   segment%field(m)%name == 'Vamp' .or. segment%field(m)%name == 'Vphase') then
-                allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc:je_obc,1))
+                allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc:je_obc,siz(3)))
               else
-                allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc+1:je_obc,1))
+                allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc+1:je_obc,siz(3)))
               endif
               if (segment%field(m)%name == 'U') then
                 allocate(segment%field(m)%bt_vel(is_obc:ie_obc,js_obc+1:je_obc))
@@ -3808,9 +3808,9 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             else
               if (segment%field(m)%name == 'U' .or. segment%field(m)%name == 'DUDY' .or. &
                 segment%field(m)%name == 'Uamp' .or. segment%field(m)%name == 'Uphase') then
-                allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc:je_obc,1))
+                allocate(segment%field(m)%buffer_dst(is_obc:ie_obc,js_obc:je_obc,siz(3)))
               else
-                allocate(segment%field(m)%buffer_dst(is_obc+1:ie_obc,js_obc:je_obc,1))
+                allocate(segment%field(m)%buffer_dst(is_obc+1:ie_obc,js_obc:je_obc,siz(3)))
               endif
               if (segment%field(m)%name == 'V') then
                 allocate(segment%field(m)%bt_vel(is_obc+1:ie_obc,js_obc:je_obc))
@@ -3849,11 +3849,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
         else
           tmp_buffer_in => tmp_buffer
         endif
-        
-        ! try skipping time interpolation for tides
-        if (index(segment%field(m)%name, 'phase') .le. 0 .and. index(segment%field(m)%name, 'amp') .le. 0) then
-          call time_interp_external(segment%field(m)%fid,Time, tmp_buffer_in)
-        endif 
+        call time_interp_external(segment%field(m)%fid,Time, tmp_buffer_in)
         ! NOTE: Rotation of face-points require that we skip the final value
         if (turns /= 0) then
           ! TODO: This is hardcoded for 90 degrees, and needs to be generalized.
@@ -4119,7 +4115,6 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
 
     enddo
     do m = 1,segment%num_fields
-
       if (segment%field(m)%fid>0) then
         if (trim(segment%field(m)%name) == 'U' .or. trim(segment%field(m)%name) == 'V') then
           if (trim(segment%field(m)%name) == 'U' .and. segment%is_E_or_W) then
@@ -4129,6 +4124,11 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               tidal_vel = 0.0
               if(OBC%add_tide_harmonics) then  
                 do c=1,OBC%n_tide_harmonics
+                  ! Use these to debug
+                  ! write(*, *) segment%field(segment%uamp_index)%buffer_dst(I,j,c)
+                  ! write(*, *) OBC%tide_frequencies(c)
+                  ! write(*, *) segment%field(segment%uphase_index)%buffer_dst(I,j,c) 
+                  ! write(*, *) OBC%tide_eq_phases(c)
                   tidal_vel = tidal_vel + US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,c) * &
                     cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%uphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c) )
                 enddo
