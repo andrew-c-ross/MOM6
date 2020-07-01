@@ -22,7 +22,7 @@ use MOM_restart,              only : register_restart_field, register_restart_pa
 use MOM_restart,              only : query_initialized, MOM_restart_CS
 use MOM_obsolete_params,      only : obsolete_logical, obsolete_int, obsolete_real, obsolete_char
 use MOM_string_functions,     only : extract_word, remove_spaces
-use MOM_tidal_forcing,        only : astro_longitudes_init, eq_phase, tidal_frequency
+use MOM_tidal_forcing,        only : astro_longitudes_init, eq_phase, nodal_fu, tidal_frequency
 use MOM_time_manager,         only : set_date, time_type, time_type_to_real, operator(-)
 use MOM_tracer_registry,      only : tracer_type, tracer_registry_type, tracer_name_lookup
 use time_interp_external_mod, only : init_external_field, time_interp_external
@@ -270,12 +270,12 @@ type, public :: ocean_OBC_type
   logical :: add_tide_harmonics = .false.            !< If true, add tidal harmonics. Set to true if n_tide_harmonics > 0.
   character(len=3), allocatable, dimension(:) :: tide_names
   real, allocatable, dimension(:) :: tide_frequencies
-  real, allocatable, dimension(:) :: tide_eq_phases
+  real, allocatable, dimension(:) :: tide_eq_phases, tide_fn, tide_un
 
   logical :: add_eq_phase = .false.                   !< If true, add the equilibrium phase argument to the specified boundary tidal phase.
   logical :: add_nodal_terms = .false.                !< If true, insert terms for the 18.6 year modulation when calculating tidal boundary conditions.
   real :: time_ref
-  real, dimension(3) :: astro_shp
+  real, dimension(4) :: astro_shpn
 
   ! Properties of the segments used.
   type(OBC_segment_type), pointer, dimension(:) :: &
@@ -366,7 +366,7 @@ subroutine open_boundary_config(G, US, param_file, OBC)
   character(len=100) :: segment_str      ! The contents (rhs) for parameter "segment_param_str"
   character(len=200) :: config1          ! String for OBC_USER_CONFIG
   real               :: Lscale_in, Lscale_out ! parameters controlling tracer values at the boundaries [L ~> m]
-  integer, dimension(3) :: tide_ref_date
+  integer, dimension(3) :: tide_ref_date, nodal_ref_date
   character(len=100) :: tide_constituent_str
   
   allocate(OBC)
@@ -461,12 +461,16 @@ subroutine open_boundary_config(G, US, param_file, OBC)
           "If true, add the equilibrium phase argument to the specified tidal phase", &
           default=.false., fail_if_missing=.true.) ! todo: currently fail to help debug
 
-      call get_param(param_file, mdl, "OBC_TIDE_ADD_NODAL_TERMS", OBC%add_nodal_terms, &
+      call get_param(param_file, mdl, "OBC_TIDE_ADD_NODAL", OBC%add_nodal_terms, &
           "If true, add the equilibrium phase argument to the specified tidal phase", default=.false.)
 
       call get_param(param_file, mdl, "OBC_TIDE_REF_DATE", tide_ref_date, &
           "Reference date to use for tidal calculations and equilibrium phase", &
           fail_if_missing=.true.)
+
+      call get_param(param_file, mdl, "OBC_NODAL_REF_DATE", nodal_ref_date, &
+          "Reference date to use for tidal calculations and equilibrium phase", &
+          fail_if_missing=.false., default=0)
 
       if(.not. OBC%add_eq_phase) then
         ! If equilibrium phase argument is not added, the input phases
@@ -474,7 +478,7 @@ subroutine open_boundary_config(G, US, param_file, OBC)
         call MOM_mesg('OBC tidal phases will *not* be corrected with equilibrium arguments.')
       endif 
 
-      call initialize_obc_tides(OBC, tide_ref_date, tide_constituent_str)
+      call initialize_obc_tides(OBC, tide_ref_date, nodal_ref_date, tide_constituent_str)
       
     else
       OBC%add_tide_harmonics = .false.
@@ -956,11 +960,15 @@ subroutine initialize_segment_data(G, OBC, PF)
 
 end subroutine initialize_segment_data
 
-subroutine initialize_obc_tides(OBC, tide_ref_date, tide_constituent_str)
+subroutine initialize_obc_tides(OBC, tide_ref_date, nodal_ref_date, tide_constituent_str)
   type(ocean_OBC_type), pointer       :: OBC !< Open boundary control structure
   integer, dimension(3), intent(in) :: tide_ref_date
+  integer, dimension(3), intent(in) :: nodal_ref_date
   character(len=100), intent(in) :: tide_constituent_str
+  real, dimension(4) :: nodal_shpn
+  real :: nodal_time
   integer :: c
+
 
   allocate(OBC%tide_names(OBC%n_tide_harmonics))
   read(tide_constituent_str, *) OBC%tide_names
@@ -969,20 +977,42 @@ subroutine initialize_obc_tides(OBC, tide_ref_date, tide_constituent_str)
   
   ! Initialize reference time for tides and 
   ! find relevant lunar and solar longitudes at the reference time
-  if (OBC%add_eq_phase) call astro_longitudes_init(OBC%time_ref, OBC%astro_shp)
-  
+  if (OBC%add_eq_phase) call astro_longitudes_init(OBC%time_ref, OBC%astro_shpn)
+
+  ! If the nodal correction is based on a different time, initialize that.
+  ! Otherwise, it can use N from the time reference.
+  if (OBC%add_nodal_terms) then
+    if (sum(nodal_ref_date) .ne. 0) then
+      nodal_time = time_type_to_real(set_date(nodal_ref_date(1), nodal_ref_date(2), nodal_ref_date(3)))
+      call astro_longitudes_init(nodal_time, nodal_shpn)
+    else
+      nodal_shpn = OBC%astro_shpn
+    endif
+  endif
+
   allocate(OBC%tide_frequencies(OBC%n_tide_harmonics))
   allocate(OBC%tide_eq_phases(OBC%n_tide_harmonics))
+  allocate(OBC%tide_fn(OBC%n_tide_harmonics))
+  allocate(OBC%tide_un(OBC%n_tide_harmonics))
 
   do c=1,OBC%n_tide_harmonics
     OBC%tide_frequencies(c) = tidal_frequency(trim(OBC%tide_names(c)))
+
+    ! Find equilibrum phase if needed
     if (OBC%add_eq_phase) then
-      OBC%tide_eq_phases(c) = eq_phase(trim(OBC%tide_names(c)), OBC%astro_shp)
+      OBC%tide_eq_phases(c) = eq_phase(trim(OBC%tide_names(c)), OBC%astro_shpn)
     else
       OBC%tide_eq_phases(c) = 0.0
     endif
+
+    ! Find nodal corrections if needed
+    if (OBC%add_nodal_terms) then
+      call nodal_fu(trim(OBC%tide_names(c)), nodal_shpn(4), OBC%tide_fn(c), OBC%tide_un(c))
+    else
+      OBC%tide_fn(c) = 1.0
+      OBC%tide_un(c) = 0.0
+    endif
   enddo
-  
 end subroutine initialize_obc_tides
 
 !> Define indices for segment and store in hor_index_type
@@ -4129,8 +4159,8 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
                   ! write(*, *) OBC%tide_frequencies(c)
                   ! write(*, *) segment%field(segment%uphase_index)%buffer_dst(I,j,c) 
                   ! write(*, *) OBC%tide_eq_phases(c)
-                  tidal_vel = tidal_vel + US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,c) * &
-                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%uphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c) )
+                  tidal_vel = tidal_vel + OBC%tide_fn(c)*US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,c) * &
+                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%uphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c) + OBC%tide_un(c) )
                 enddo
               endif
               if (abs(tidal_vel) > 2) then
@@ -4151,8 +4181,8 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               tidal_vel = 0.0
               if(OBC%add_tide_harmonics) then
                 do c=1,OBC%n_tide_harmonics
-                  tidal_vel = US%m_s_to_L_T*segment%field(segment%vamp_index)%buffer_dst(I,j,c) * &
-                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%vphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c))
+                  tidal_vel = US%m_s_to_L_T*OBC%tide_fn(c)*segment%field(segment%vamp_index)%buffer_dst(I,j,c) * &
+                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%vphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c) + OBC%tide_un(c))
                 enddo
               endif
               if(abs(tidal_vel) > 2) then
@@ -4174,8 +4204,8 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               tidal_vel = 0.0
               if(OBC%add_tide_harmonics) then
                 do c=1,OBC%n_tide_harmonics
-                  tidal_vel = US%m_s_to_L_T*segment%field(segment%vamp_index)%buffer_dst(I,j,c) * &
-                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%vphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c))
+                  tidal_vel = US%m_s_to_L_T*OBC%tide_fn(c)*segment%field(segment%vamp_index)%buffer_dst(I,j,c) * &
+                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%vphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c) + OBC%tide_un(c))
                 enddo
               endif
               if(abs(tidal_vel) > 2) then
@@ -4193,8 +4223,8 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             tidal_vel = 0.0
             if(OBC%add_tide_harmonics) then
               do c=1,OBC%n_tide_harmonics
-                tidal_vel = US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,c) * &
-                  cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%uphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c))
+                tidal_vel = US%m_s_to_L_T*OBC%tide_fn(c)*segment%field(segment%uamp_index)%buffer_dst(I,j,c) * &
+                  cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%uphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c) + OBC%tide_un(c))
               enddo
             endif
             if(abs(tidal_vel) > 2) then
@@ -4255,8 +4285,8 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               tidal_elev = 0.0
               if(OBC%add_tide_harmonics) then 
                 do c=1,OBC%n_tide_harmonics
-                  tidal_elev = tidal_elev + segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
-                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%zphase_index)%buffer_dst(i,j,c) + OBC%tide_eq_phases(c))
+                  tidal_elev = tidal_elev + OBC%tide_fn(c)*segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
+                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%zphase_index)%buffer_dst(i,j,c) + OBC%tide_eq_phases(c) + OBC%tide_un(c))
                 enddo
               endif
               if(abs(tidal_elev) > 2) then
@@ -4271,8 +4301,8 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               tidal_elev = 0.0
               if(OBC%add_tide_harmonics) then 
                 do c=1,OBC%n_tide_harmonics
-                  tidal_elev = tidal_elev + segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
-                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%zphase_index)%buffer_dst(i,j,c) + OBC%tide_eq_phases(c))
+                  tidal_elev = tidal_elev + OBC%tide_fn(c)*segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
+                    cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%zphase_index)%buffer_dst(i,j,c) + OBC%tide_eq_phases(c) + OBC%tide_un(c))
                 enddo
               endif
               if(abs(tidal_elev) > 2) then
