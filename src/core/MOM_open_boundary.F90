@@ -368,7 +368,7 @@ subroutine open_boundary_config(G, US, param_file, OBC)
   real               :: Lscale_in, Lscale_out ! parameters controlling tracer values at the boundaries [L ~> m]
   integer, dimension(3) :: tide_ref_date, nodal_ref_date
   character(len=100) :: tide_constituent_str
-  
+
   allocate(OBC)
 
   call get_param(param_file, mdl, "OBC_NUMBER_OF_SEGMENTS", OBC%number_of_segments, &
@@ -479,10 +479,8 @@ subroutine open_boundary_config(G, US, param_file, OBC)
         ! If equilibrium phase argument is not added, the input phases
         ! should already be relative to the reference time.
         call MOM_mesg('OBC tidal phases will *not* be corrected with equilibrium arguments.')
-      endif 
+      endif
 
-      call initialize_obc_tides(OBC, tide_ref_date, nodal_ref_date, tide_constituent_str)
-      
     else
       OBC%add_tide_harmonics = .false.
     endif
@@ -567,6 +565,14 @@ subroutine open_boundary_config(G, US, param_file, OBC)
       endif
     enddo
 
+    ! Moved this earlier because time_interp_external_init needs to be called
+    ! before anything that uses time_interp_external (such as initialize_segment_data)
+    if ((OBC%specified_u_BCs_exist_globally .or. OBC%specified_v_BCs_exist_globally .or. &
+      OBC%open_u_BCs_exist_globally .or. OBC%open_v_BCs_exist_globally)) then
+      ! Need this for ocean_only mode boundary interpolation.
+      call time_interp_external_init()
+    endif
+
     !    if (open_boundary_query(OBC, needs_ext_seg_data=.true.)) &
     call initialize_segment_data(G, OBC, param_file)
 
@@ -619,13 +625,15 @@ subroutine open_boundary_config(G, US, param_file, OBC)
        "MOM_open_boundary, open_boundary_config: "//&
        "Symmetric memory must be used when using Flather OBCs.")
 
+  ! Need to do this last, because it depends on time_interp_external_init having already been called
+  if (OBC%add_tide_harmonics) then
+    call initialize_obc_tides(OBC, tide_ref_date, nodal_ref_date, tide_constituent_str)
+  endif
+
   if (.not.(OBC%specified_u_BCs_exist_globally .or. OBC%specified_v_BCs_exist_globally .or. &
-              OBC%open_u_BCs_exist_globally .or. OBC%open_v_BCs_exist_globally)) then
+    OBC%open_u_BCs_exist_globally .or. OBC%open_v_BCs_exist_globally)) then
     ! No open boundaries have been requested
     call open_boundary_dealloc(OBC)
-  else
-    ! Need this for ocean_only mode boundary interpolation.
-    call time_interp_external_init()
   endif
 
 end subroutine open_boundary_config
@@ -977,8 +985,8 @@ subroutine initialize_obc_tides(OBC, tide_ref_date, nodal_ref_date, tide_constit
   read(tide_constituent_str, *) OBC%tide_names
 
   OBC%time_ref = time_type_to_real(set_date(tide_ref_date(1), tide_ref_date(2), tide_ref_date(3)))
-  
-  ! Initialize reference time for tides and 
+
+  ! Initialize reference time for tides and
   ! find relevant lunar and solar longitudes at the reference time
   if (OBC%add_eq_phase) call astro_longitudes_init(OBC%time_ref, OBC%astro_shpn)
 
@@ -3944,7 +3952,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
           endif
         endif
         ! no dz for tidal variables
-        if (segment%field(m)%nk_src > 1 .and.& 
+        if (segment%field(m)%nk_src > 1 .and.&
             (index(segment%field(m)%name, 'phase') .le. 0 .and. index(segment%field(m)%name, 'amp') .le. 0)) then
           call time_interp_external(segment%field(m)%fid_dz,Time, tmp_buffer_in)
           if (turns /= 0) then
@@ -4090,8 +4098,8 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
               enddo
             endif
           endif
-        
-        elseif (segment%field(m)%nk_src > 1 .and. & 
+
+        elseif (segment%field(m)%nk_src > 1 .and. &
             (index(segment%field(m)%name, 'phase') > 0 .or. index(segment%field(m)%name, 'amp') > 0)) then
           segment%field(m)%buffer_dst(:,:,:) = segment%field(m)%buffer_src(:,:,:)
         else  ! 2d data
@@ -4155,12 +4163,12 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
             do j=js_obc+1,je_obc
               normal_trans_bt(I,j) = 0.0
               tidal_vel = 0.0
-              if(OBC%add_tide_harmonics) then  
+              if(OBC%add_tide_harmonics) then
                 do c=1,OBC%n_tide_harmonics
                   ! Use these to debug
                   ! write(*, *) segment%field(segment%uamp_index)%buffer_dst(I,j,c)
                   ! write(*, *) OBC%tide_frequencies(c)
-                  ! write(*, *) segment%field(segment%uphase_index)%buffer_dst(I,j,c) 
+                  ! write(*, *) segment%field(segment%uphase_index)%buffer_dst(I,j,c)
                   ! write(*, *) OBC%tide_eq_phases(c)
                   tidal_vel = tidal_vel + OBC%tide_fn(c)*US%m_s_to_L_T*segment%field(segment%uamp_index)%buffer_dst(I,j,c) * &
                     cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%uphase_index)%buffer_dst(I,j,c) + OBC%tide_eq_phases(c) + OBC%tide_un(c) )
@@ -4274,7 +4282,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
           do j=js_obc2,je_obc
             do i=is_obc2,ie_obc
               tidal_elev = 0.0
-              if(OBC%add_tide_harmonics) then 
+              if(OBC%add_tide_harmonics) then
                 do c=1,OBC%n_tide_harmonics
                   tidal_elev = tidal_elev + OBC%tide_fn(c)*segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
                     cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%zphase_index)%buffer_dst(i,j,c) + OBC%tide_eq_phases(c) + OBC%tide_un(c))
@@ -4287,7 +4295,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
           do j=js_obc2,je_obc
             do i=is_obc2,ie_obc
               tidal_elev = 0.0
-              if(OBC%add_tide_harmonics) then 
+              if(OBC%add_tide_harmonics) then
                 do c=1,OBC%n_tide_harmonics
                   tidal_elev = tidal_elev + OBC%tide_fn(c)*segment%field(segment%zamp_index)%buffer_dst(i,j,c) * &
                     cos((time_type_to_real(Time) - OBC%time_ref)*OBC%tide_frequencies(c) - segment%field(segment%zphase_index)%buffer_dst(i,j,c) + OBC%tide_eq_phases(c) + OBC%tide_un(c))
