@@ -16,7 +16,7 @@ implicit none ; private
 
 public calc_tidal_forcing, tidal_forcing_init, tidal_forcing_end
 public tidal_forcing_sensitivity
-public astro_longitudes_init, eq_phase, tidal_frequency
+public astro_longitudes_init, eq_phase, nodal_fu, tidal_frequency
 
 #include <MOM_memory.h>
 
@@ -48,7 +48,7 @@ type, public :: tidal_forcing_CS ; private
   integer :: struct(MAX_CONSTITUENTS) !< An encoded spatial structure for each constituent
   character (len=16) :: const_name(MAX_CONSTITUENTS) !< The name of each constituent
   real :: time_ref
-  real, dimension(3) :: astro_shp
+  real, dimension(4) :: astro_shpn
   real, pointer, dimension(:,:,:) :: &
     sin_struct => NULL(), &    !< The sine and cosine based structures that can
     cos_struct => NULL(), &    !< be associated with the astronomical forcing.
@@ -64,49 +64,54 @@ integer :: id_clock_tides !< CPU clock for tides
 
 contains
 
-!> Finds astronomical longitudes s, h, and p, 
-!! the mean longitude of the moon, sun, and lunar perigee, respectively,
+!> Finds astronomical longitudes s, h, p, and N, 
+!! the mean longitude of the moon, sun, lunar perigee, and ascending node, respectively,
 !! at the specified reference time time_ref.
 !! These formulas were obtained from
-!! Ernst W. Schwiderski (1980) Ocean tides, part I: Global ocean tidal equations, 
-!! Marine Geodesy, 3:1-4, 161-217, DOI: 10.1080/01490418009387997.
+!! Kowalik and Luick, "Modern Theory and Practice of Tide Analysis and Tidal Power", 2019
+!! (their Equation I.71), which is from Schureman, 1958.
 !! For simplicity, the time associated with time_ref should 
 !! be at midnight, and will be rounded down to midnight
-!! if it is not. 
-subroutine astro_longitudes_init(time_ref, longitudes_shp)
-  real, dimension(3), intent(out) :: longitudes_shp
+!! if it is not. These formulas also only make sense if 
+!! the calendar is gregorian.
+subroutine astro_longitudes_init(time_ref, longitudes_shpn)
+  real, dimension(4), intent(out) :: longitudes_shpn
   real, intent(inout) :: time_ref
   real :: D, T
   real, parameter :: PI = 4.0*atan(1.0) ! 3.14159... 
   ! time ref needs to be at midnight, so round down to nearest day
+  !!!!! IMPORTANT: the time difference needs to be calculated 
+  !!!!! using the Gregorian calendar 
   time_ref = time_ref - mod(time_ref, 24.0*3600.0)
-  ! Time in Julian days since 1975-01-01, starting at 1
-  D = 1 + (time_ref - time_type_to_real(set_date(1975, 1, 1))) / (24.0 * 3600.0)
-  ! Approximately Julian centuries
-  T = (27392.500528 + 1.0000000356 * D) / 36525.0
+  ! Time in days since 1900-01-01
+  D = (time_ref - time_type_to_real(set_date(1900, 1, 1))) / (24.0 * 3600.0)
+  ! Time in Julian centuries
+  T = D / 36525.0
   ! s: Mean longitude of moon
-  longitudes_shp(1) = 270.434358 + 481267.88314137 * T - 0.001133 * (T**2) + 1.9e-6 * (T**3)
+  longitudes_shpn(1) = 277.0248 + 481267.8906 * T + 0.0011 * (T**2)
   ! h: Mean longitude of sun
-  longitudes_shp(2) = 279.69668 + 36000.768930485 * T + 3.03e-4 * (T**2)
+  longitudes_shpn(2) = 280.1895 + 36000.7689 * T + 3.0310e-4 * (T**2)
   ! p: Mean longitude of lunar perigee
-  longitudes_shp(3) = 334.329653 + 4069.0340329575 * T - 0.010325 * (T ** 2) - 1.2e-5 * (T**3)
+  longitudes_shpn(3) = 334.3853 + 4069.0340 * T - 0.0103 * (T**2)
+  ! n: Longitude of ascending node
+  longitudes_shpn(4) = 259.1568 - 1934.142 * T + 0.0021 * (T**2)
   ! Convert to radians on [0, 2pi)
-  longitudes_shp = mod(longitudes_shp, 360.0) * PI / 180.0
+  longitudes_shpn = mod(longitudes_shpn, 360.0) * PI / 180.0
 end subroutine astro_longitudes_init
 
 !> Calculates the equilibrium phase argument for 
 !! the given tidal harmonic constituent constit
-!! given the array of longitudes shp.
-function eq_phase(constit, shp)
+!! given the array of longitudes shpn.
+function eq_phase(constit, shpn)
   character (len=2), intent(in) :: constit
-  real, dimension(3), intent(in) :: shp
+  real, dimension(3), intent(in) :: shpn
   real :: s, h, p
   real, parameter :: PI = 4.0*atan(1.0) ! 3.14159...
   real :: eq_phase
 
-  s = shp(1)
-  h = shp(2)
-  p = shp(3)
+  s = shpn(1)
+  h = shpn(2)
+  p = shpn(3)
 
   select case (constit)
     case ("M2")
@@ -162,8 +167,51 @@ function tidal_frequency(constit)
     case default
       call MOM_error(FATAL, "tidal_frequency: unrecognized constituent")
   end select
-
 end function tidal_frequency
+
+!> Table I.6 in Kowalik and Luick
+subroutine nodal_fu(constit, N, fn, un)
+  character (len=2), intent(in) :: constit
+  real, intent(in) :: N  ! units: radians
+  real, parameter :: RADIANS = 4.0 * atan(1.0) / 180.0
+  real, intent(out) :: fn, un
+
+  select case (constit)
+    case ("M2")
+      fn = 1.0 - 0.037 * cos(N)
+      un = -2.1 * RADIANS * sin(N)
+    case ("S2")
+      fn = 1.0 ! no amplitude modulation
+      un = 0.0 ! no phase mdulation
+    case ("N2")
+      fn = 1.0 - 0.037 * cos(N)
+      un = -2.1 * RADIANS * sin(N)
+    case ("K2")
+      fn = 1.024 + 0.286 * cos(N)
+      un = -17.7 * RADIANS * sin(N)
+    case ("K1")
+      fn = 1.006 + 0.115 * cos(N)
+      un = -8.9 * RADIANS * sin(N)
+    case ("O1")
+      fn = 1.009 + 0.187 * cos(N)
+      un = 10.8 * RADIANS * sin(N)
+    case ("P1")
+      fn = 1.0 ! no amplitude modulation
+      un = 0.0 ! no phase mdulation
+    case ("Q1")
+      fn = 1.009 + 0.187 * cos(N)
+      un = 10.8 * RADIANS * sin(N)
+    case ("MF")
+      fn = 1.043 + 0.414 * cos(N)
+      un = -23.7 * RADIANS * sin(N)
+    case ("MM")
+      fn = 1.0 - 0.130 * cos(N)
+      un = 0.0
+    case default
+      call MOM_error(FATAL, "nodal_fu: unrecognized constituent")
+  end select
+
+end subroutine nodal_fu
 
 !> This subroutine allocates space for the static variables used
 !! by this module.  The metrics may be effectively 0, 1, or 2-D arrays,
@@ -353,7 +401,7 @@ subroutine tidal_forcing_init(Time, G, param_file, CS)
 
   ! Initialize reference time for tides and 
   ! find relevant lunar and solar longitudes at the reference time
-  if (CS%use_eq_phase) call astro_longitudes_init(CS%time_ref, CS%astro_shp)
+  if (CS%use_eq_phase) call astro_longitudes_init(CS%time_ref, CS%astro_shpn)
 
   c=0
   if (use_M2) then
@@ -415,7 +463,7 @@ subroutine tidal_forcing_init(Time, G, param_file, CS)
     amp_def(c) = CS%amp(c)
     CS%phase0(c) = 0.0
     if (CS%use_eq_phase) then
-      phase0_def(c) = eq_phase(CS%const_name(c), CS%astro_shp)
+      phase0_def(c) = eq_phase(CS%const_name(c), CS%astro_shpn)
     else
       phase0_def(c) = 0.0
     endif
@@ -588,6 +636,7 @@ subroutine calc_tidal_forcing(Time, eta, eta_tidal, G, CS, deta_tidal_deta, m_to
 
   do c=1,CS%nc
     m = CS%struct(c)
+    ! todo: add phase0, or subtract?
     amp_cosomegat = m_Z*CS%amp(c)*CS%love_no(c) * cos(CS%freq(c)*now + CS%phase0(c))
     amp_sinomegat = m_Z*CS%amp(c)*CS%love_no(c) * sin(CS%freq(c)*now + CS%phase0(c))
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
