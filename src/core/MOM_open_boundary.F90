@@ -59,6 +59,7 @@ public register_temp_salt_segments
 public register_obgc_segments
 public fill_temp_salt_segments
 public fill_obgc_segments
+public set_obgc_segments_props
 public open_boundary_register_restarts
 public update_segment_tracer_reservoirs
 public update_OBC_ramp
@@ -317,6 +318,15 @@ type, public :: OBC_registry_type
                                              !! When locked=.true.,no more boundaries can be registered.
 end type OBC_registry_type
 
+!> Type to carry OBC information needed for setting segments for OBGC tracers
+type, private :: external_tracers_segments_props
+   type(external_tracers_segments_props), pointer :: next => NULL()
+   character(len=128) :: tracer_name
+   character(len=128) :: tracer_src_file
+   character(len=128) :: tracer_src_field
+end type external_tracers_segments_props
+type(external_tracers_segments_props), pointer, save :: obgc_segments_props => NULL() !< Linked-list of obgc tracers properties
+integer, save :: num_obgc_tracers = 0  !< Keeps the total number of obgc tracers
 integer :: id_clock_pass !< A CPU time clock
 
 character(len=40)  :: mdl = "MOM_open_boundary" !< This module's name.
@@ -609,7 +619,7 @@ subroutine initialize_segment_data(G, OBC, PF)
   type(ocean_OBC_type),   intent(inout) :: OBC !< Open boundary control structure
   type(param_file_type),  intent(in)    :: PF  !< Parameter file handle
 
-  integer :: n,m,num_fields
+  integer :: n,m,num_fields,mm
   character(len=256) :: segstr, filename
   character(len=20)  :: segnam, suffix
   character(len=32)  :: varnam, fieldname
@@ -625,6 +635,7 @@ subroutine initialize_segment_data(G, OBC, PF)
   integer, dimension(:), allocatable :: saved_pelist
   integer :: current_pe
   integer, dimension(1) :: single_pelist
+  type(external_tracers_segments_props), pointer :: obgc_segments_props_list =>NULL() 
   !will be able to dynamically switch between sub-sampling refined grid data or model grid
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
@@ -677,8 +688,9 @@ subroutine initialize_segment_data(G, OBC, PF)
       cycle ! cycle to next segment
     endif
 
-    allocate(segment%field(num_fields))
-    segment%num_fields = num_fields
+    !There are num_obgc_tracers obgc tracers are there that are not listed in param file
+    segment%num_fields = num_fields +num_obgc_tracers 
+    allocate(segment%field(segment%num_fields))
 
     segment%temp_segment_data_exists=.false.
     segment%salt_segment_data_exists=.false.
@@ -691,8 +703,21 @@ subroutine initialize_segment_data(G, OBC, PF)
     IsdB = segment%HI%IsdB ; IedB = segment%HI%IedB
     JsdB = segment%HI%JsdB ; JedB = segment%HI%JedB
 
-    do m=1,num_fields
-      call parse_segment_data_str(trim(segstr), var=trim(fields(m)), value=value, filenam=filename, fieldnam=fieldname)
+    obgc_segments_props_list => obgc_segments_props !Get a pointer to the saved type
+    do m=1,segment%num_fields
+      if(m .le. num_fields) then  
+       call parse_segment_data_str(trim(segstr), var=trim(fields(m)), value=value, filenam=filename, fieldnam=fieldname)
+      else
+       call get_obgc_segments_props(obgc_segments_props_list,fields(m),filename,fieldname)
+       do mm=1,num_fields
+          if(trim(fields(m))==trim(fields(mm))) then
+             if (is_root_pe()) &
+                 call MOM_error(FATAL,"MOM_open_boundary:initialize_segment_data(): obgc tracer " //trim(fields(m))// &
+" appears in OBC_SEGMENT_XXX_DATA string in MOM6 param file. This is not supported!")           
+          endif
+       enddo
+      endif 
+      
       if (trim(filename) /= 'none') then
         OBC%update_OBC = .true. ! Data is assumed to be time-dependent if we are reading from file
         OBC%needs_IO_for_data = .true. ! At least one segment is using I/O for OBC data
@@ -3297,7 +3322,7 @@ function get_tracer_index(OBC_seg,tr_name)
   integer :: get_tracer_index, it
   get_tracer_index=-1
   it=1
-  do while(allocated(OBC_seg%tr_Reg%Tr(it)%t))
+  do while(associated(OBC_seg%tr_Reg%Tr(it)%t))
     if (trim(OBC_seg%tr_Reg%Tr(it)%name) == trim(tr_name)) then
       get_tracer_index=it
       exit
@@ -4394,6 +4419,38 @@ subroutine register_temp_salt_segments(GV, OBC, tr_Reg, param_file)
   enddo
 
 end subroutine register_temp_salt_segments
+
+!> Sets the OBC properties of external obgc tracers, such as their source file and field name
+subroutine set_obgc_segments_props(tr_name,obc_src_file_name,obc_src_field_name)
+  character(len=*),           intent(in)    :: tr_name            !< Tracer name
+  character(len=*),           intent(in)    :: obc_src_file_name  !< OBC source file name
+  character(len=*),           intent(in)    :: obc_src_field_name !< name of the field in the source file
+
+  type(external_tracers_segments_props),pointer :: node_ptr => NULL()
+  allocate(node_ptr)
+  node_ptr%tracer_name = trim(tr_name)
+  node_ptr%tracer_src_file = trim(obc_src_file_name)
+  node_ptr%tracer_src_field = trim(obc_src_field_name)
+  !Reversed Linked List implementation! Make this new node to be the head of the list.
+  node_ptr%next => obgc_segments_props
+  obgc_segments_props => node_ptr
+  num_obgc_tracers = num_obgc_tracers+1
+end subroutine set_obgc_segments_props
+
+!> Get the OBC properties of external obgc tracers, such as their source file and field name
+subroutine get_obgc_segments_props(node, tr_name,obc_src_file_name,obc_src_field_name)
+  type(external_tracers_segments_props),pointer :: node 
+  character(len=*),           intent(out)    :: tr_name            !< Tracer name
+  character(len=*),           intent(out)    :: obc_src_file_name  !< OBC source file name
+  character(len=*),           intent(out)    :: obc_src_field_name !< name of the field in the source file
+  
+  tr_name=trim(node%tracer_name)
+  obc_src_file_name=trim(node%tracer_src_file)
+  obc_src_field_name=trim(node%tracer_src_field)
+  !pop the head.
+  node => node%next
+  
+end subroutine get_obgc_segments_props
 
 subroutine register_obgc_segments(GV, OBC, tr_Reg, param_file, tr_name)
   type(verticalGrid_type),    intent(in)    :: GV         !< ocean vertical grid structure

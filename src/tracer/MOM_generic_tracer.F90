@@ -21,7 +21,8 @@ module MOM_generic_tracer
   use g_tracer_utils,   only: g_tracer_get_next,g_tracer_type,g_tracer_is_prog,g_tracer_flux_init
   use g_tracer_utils,   only: g_tracer_send_diag,g_tracer_get_values
   use g_tracer_utils,   only: g_tracer_get_pointer,g_tracer_get_alias,g_tracer_set_csdiag
-
+  use g_tracer_utils,   only: g_tracer_get_obc_segment_props
+  
   use MOM_diag_mediator, only : post_data, register_diag_field, safe_alloc_ptr
   use MOM_diag_mediator, only : diag_ctrl, get_diag_time_end
   use MOM_error_handler, only : MOM_error, FATAL, WARNING, NOTE, is_root_pe
@@ -41,12 +42,14 @@ module MOM_generic_tracer
   use MOM_tracer_initialization_from_Z, only : MOM_initialize_tracer_from_Z
   use MOM_unit_scaling, only : unit_scale_type
   use MOM_variables, only : surface, thermo_var_ptrs
-  use MOM_open_boundary, only : ocean_OBC_type
+  use MOM_open_boundary, only : ocean_OBC_type, register_obgc_segments, fill_obgc_segments
+  use MOM_open_boundary, only : set_obgc_segments_props
   use MOM_verticalGrid, only : verticalGrid_type
 
 
   implicit none ; private
   logical :: g_registered = .false.
+  integer, parameter :: fm_string_len=128 !>string lengths used in obgc packages
 
   public register_MOM_generic_tracer, initialize_MOM_generic_tracer
   public MOM_generic_tracer_column_physics, MOM_generic_tracer_surface_state
@@ -105,6 +108,7 @@ contains
     integer :: ntau, k,i,j,axes(3)
     type(g_tracer_type), pointer      :: g_tracer,g_tracer_next
     character(len=fm_string_len)      :: g_tracer_name,longname,units
+    character(len=fm_string_len)      :: obc_src_file_name,obc_src_field_name
     real, dimension(:,:,:,:), pointer   :: tr_field
     real, dimension(:,:,:), pointer     :: tr_ptr
     real, dimension(HI%isd:HI%ied, HI%jsd:HI%jed,GV%ke)         :: grid_tmask
@@ -195,6 +199,8 @@ contains
                               name=g_tracer_name, longname=longname, units=units, &
                               registry_diags=.false., &   !### CHANGE TO TRUE?
                               restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
+         if (associated(CS%OBC)) &
+           call register_obgc_segments(GV, CS%OBC, tr_Reg, param_file, g_tracer_name)
        else
          call register_restart_field(tr_ptr, g_tracer_name, .not.CS%tracers_may_reinit, &
                                      restart_CS, longname=longname, units=units)
