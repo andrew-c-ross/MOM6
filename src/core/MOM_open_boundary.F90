@@ -83,6 +83,7 @@ type, public :: OBC_segment_data_type
   integer :: fid                                !< handle from FMS associated with segment data on disk
   integer :: fid_dz                             !< handle from FMS associated with segment thicknesses on disk
   character(len=8)                :: name       !< a name identifier for the segment data
+  character(len=8)                :: genre      !< a family identifier for the segment data
   real, dimension(:,:,:), allocatable :: buffer_src   !< buffer for segment data located at cell faces
                                                 !! and on the original vertical grid
   integer                         :: nk_src     !< Number of vertical levels in the source data
@@ -708,6 +709,7 @@ subroutine initialize_segment_data(G, OBC, PF)
       if(m .le. num_fields) then  
        call parse_segment_data_str(trim(segstr), var=trim(fields(m)), value=value, filenam=filename, fieldnam=fieldname)
       else
+       segment%field(m)%genre='obgc'
        call get_obgc_segments_props(obgc_segments_props_list,fields(m),filename,fieldname)
        do mm=1,num_fields
           if(trim(fields(m))==trim(fields(mm))) then
@@ -1372,7 +1374,7 @@ subroutine parse_segment_str(ni_global, nj_global, segment_str, l, m, n, action_
 end subroutine parse_segment_str
 
 !> Parse an OBC_SEGMENT_%%%_DATA string
- subroutine parse_segment_data_str(segment_str, var, value, filenam, fieldnam, fields, num_fields, debug )
+ subroutine parse_segment_data_str(segment_str, var, value, filenam, fieldnam, fields, num_fields, debug, has_var )
    character(len=*),           intent(in)   :: segment_str !< A string in form of
                                                           !! "VAR1=file:foo1.nc(varnam1),VAR2=file:foo2.nc(varnam2),..."
    character(len=*), optional, intent(in)   :: var        !< The name of the variable for which parameters are needed
@@ -1384,14 +1386,16 @@ end subroutine parse_segment_str
                      optional, intent(out)  :: fields     !< List of fieldnames for each segment
    integer, optional, intent(out)           :: num_fields !< The number of fields in the segment data
    logical, optional, intent(in)            :: debug      !< If present and true, write verbose debugging messages
+   logical, optional, intent(out)           :: has_var     !< .true. if var is found in segment_str
    ! Local variables
    character(len=128) :: word1, word2, word3, method
    integer :: lword, nfields, n, m
-   logical :: continue,dbg
+   logical :: continue,dbg,has
    character(len=32), dimension(MAX_OBC_FIELDS) :: flds
 
    nfields=0
    continue=.true.
+   has=.false.
    dbg=.false.
    if (PRESENT(debug)) dbg=debug
 
@@ -1419,11 +1423,13 @@ end subroutine parse_segment_str
      do n=1,nfields
        if (trim(var)==trim(flds(n))) then
           m=n
+          has=.true.
           exit
        endif
      enddo
+     if (PRESENT(has_var)) has_var=has
      if (m==0) then
-        call abort()
+        return ! Why  call abort() ?
      endif
 
     ! Process first word which will start with the fieldname
@@ -1505,15 +1511,8 @@ end subroutine parse_segment_str
           else
             OBC%tracer_y_reservoirs_used(2) = .true.
           endif
-        endif
-        if (fields(m) == 'gtr1') then
-          if (segment%is_E_or_W_2) then
-            OBC%tracer_x_reservoirs_used(2) = .true.
-          else
-            OBC%tracer_y_reservoirs_used(2) = .true.
-          endif
-        endif
-      endif
+       endif
+      endif 
     enddo
     ! Alternately, set first two to true if use_temperature is true
     if (use_temperature) then
@@ -1525,6 +1524,23 @@ end subroutine parse_segment_str
         OBC%tracer_y_reservoirs_used(2) = .true.
       endif
     endif
+    !Add reservoirs for external/obgc tracers
+    !There is a diconnect in the above logic between tracer index and reservoir index. 
+    !It arbitarily assigns reservoir indexes 1&2 to tracers T&S,
+    !so we need to start from 3 for the rest of tracers, hence the m+2 in the following.
+    !num_fields is the number of vars in segstr (6 of them now,   U,V,SSH,TEMP,SALT,dye)
+    !but OBC%tracer_x_reservoirs_used is allocated to size Reg%ntr, which is the total number of tracers
+    !(t,s,dye,obgc1,obcg2,obgc3,...  6 of them by chance) 
+    do m=1,num_obgc_tracers
+       !This logic assumes all external tarcers need a reservoir
+       !The segments for tracers are not initialized yet (that happens later in initialize_segment_data())
+       !so we cannot query to determine if this tracer needs a reservoir.  
+       if (segment%is_E_or_W_2) then
+        OBC%tracer_x_reservoirs_used(m+2) = .true.
+       else
+        OBC%tracer_y_reservoirs_used(m+2) = .true.
+       endif         
+    enddo
   enddo
 
   return
@@ -4125,10 +4141,10 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
         else
           segment%tr_Reg%Tr(2)%OBC_inflow_conc = segment%field(m)%value
         endif
-      elseif (trim(segment%field(m)%name) == 'gtr1') then
-        nt=get_tracer_index(segment,'gtr1')
+      elseif (trim(segment%field(m)%genre) == 'obgc') then
+        nt=get_tracer_index(segment,trim(segment%field(m)%name))
         if(nt .lt. 0) then
-          call MOM_error(FATAL,"update_OBC_segment_data: Did not find tracer gtr1!")
+          call MOM_error(FATAL,"update_OBC_segment_data: Did not find tracer "//trim(segment%field(m)%name))
         endif
         if (associated(segment%field(m)%buffer_dst)) then
           do k=1,nz; do j=js_obc2, je_obc; do i=is_obc2,ie_obc
@@ -4469,12 +4485,8 @@ subroutine register_obgc_segments(GV, OBC, tr_Reg, param_file, tr_name)
   do n=1, OBC%number_of_segments
     segment=>OBC%segment(n)
     if (.not. segment%on_pe) cycle
-    !For testing activate only one particular tracer for OBC
-    !This could be later generalized to all or a list of tracers
-    if(trim(tr_name) == 'gtr1') then 
-      call tracer_name_lookup(tr_Reg, tr_ptr, tr_name)
-      call register_segment_tracer(tr_ptr, param_file, GV, segment, OBC_array=.True.)
-    endif
+    call tracer_name_lookup(tr_Reg, tr_ptr, tr_name)
+    call register_segment_tracer(tr_ptr, param_file, GV, segment, OBC_array=.True.)
   enddo
 
 end subroutine register_obgc_segments
@@ -4484,34 +4496,25 @@ subroutine fill_obgc_segments(G, OBC, tr_ptr, tr_name)
   type(ocean_OBC_type),       pointer       :: OBC    !< Open boundary structure
   real, dimension(:,:,:),     pointer       :: tr_ptr !< Pointer to tracer field
   character(len=*),           intent(in)    :: tr_name!< Tracer name
-
 ! Local variables
   integer :: isd, ied, IsdB, IedB, jsd, jed, JsdB, JedB, n, nz, nt
   integer :: i, j, k
   type(OBC_segment_type), pointer :: segment => NULL() ! pointer to segment type list
 
   if (.not. associated(OBC)) return
-
-  if(trim(tr_name) /= 'gtr1') return !Test for one particular tracer 
-
   call pass_var(tr_ptr, G%Domain)
-
   nz = G%ke
-
   do n=1, OBC%number_of_segments
     segment => OBC%segment(n)
     if (.not. segment%on_pe) cycle
-
     nt=get_tracer_index(segment,tr_name)
     if(nt .lt. 0) then
       call MOM_error(FATAL,"fill_obgc_segments: Did not find tracer "// tr_name)
     endif
-
     isd = segment%HI%isd ; ied = segment%HI%ied
     jsd = segment%HI%jsd ; jed = segment%HI%jed
     IsdB = segment%HI%IsdB ; IedB = segment%HI%IedB
     JsdB = segment%HI%JsdB ; JedB = segment%HI%JedB
-
     ! Fill with Tracer values
     if (segment%is_E_or_W) then
       I=segment%HI%IsdB
