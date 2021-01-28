@@ -82,7 +82,7 @@ integer, parameter         :: MAX_OBC_FIELDS = 100  !< Maximum number of data fi
 type, public :: OBC_segment_data_type
   integer :: fid                                !< handle from FMS associated with segment data on disk
   integer :: fid_dz                             !< handle from FMS associated with segment thicknesses on disk
-  character(len=8)                :: name       !< a name identifier for the segment data
+  character(len=32)                :: name       !< a name identifier for the segment data
   character(len=8)                :: genre      !< a family identifier for the segment data
   real, dimension(:,:,:), allocatable :: buffer_src   !< buffer for segment data located at cell faces
                                                 !! and on the original vertical grid
