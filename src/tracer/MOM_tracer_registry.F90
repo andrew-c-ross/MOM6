@@ -29,7 +29,7 @@ implicit none ; private
 
 public register_tracer
 public MOM_tracer_chksum, MOM_tracer_chkinv
-public register_tracer_diagnostics, post_tracer_diagnostics, post_tracer_transport_diagnostics
+public register_tracer_diagnostics, post_tracer_diagnostics_at_sync, post_tracer_transport_diagnostics
 public preALE_tracer_diagnostics, postALE_tracer_diagnostics
 public tracer_registry_init, lock_tracer_registry, tracer_registry_end
 public tracer_name_lookup
@@ -58,25 +58,26 @@ type, public :: tracer_type
   real, dimension(:,:,:), pointer :: df_y           => NULL() !< diagnostic array for y-diffusive tracer flux
                                                               !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:,:), pointer :: lbd_dfx       => NULL()  !< diagnostic array for x-diffusive tracer flux
-                                                              !! [conc H m2 s-1 ~> conc m3 s-1 or conc kg s-1]
+                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:,:), pointer :: lbd_dfy       => NULL()  !< diagnostic array for y-diffusive tracer flux
-                                                              !! [conc H m2 s-1 ~> conc m3 s-1 or conc kg s-1]
+                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:), pointer :: lbd_dfx_2d       => NULL() !< diagnostic array for x-diffusive tracer flux
-                                                              !! [conc H m2 s-1 ~> conc m3 s-1 or conc kg s-1]
+                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:), pointer :: lbd_dfy_2d       => NULL() !< diagnostic array for y-diffusive tracer flux
-                                                              !! [conc H m2 s-1 ~> conc m3 s-1 or conc kg s-1]
+                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
+  !### These two arrays may be allocated but are never used.
   real, dimension(:,:), pointer :: lbd_bulk_df_x       => NULL() !< diagnostic array for x-diffusive tracer flux
-                                                              !! [conc H m2 s-1 ~> conc m3 s-1 or conc kg s-1]
+                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:), pointer :: lbd_bulk_df_y       => NULL() !< diagnostic array for y-diffusive tracer flux
-                                                              !! [conc H m2 s-1 ~> conc m3 s-1 or conc kg s-1]
+                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:),   pointer :: df2d_x         => NULL() !< diagnostic vertical sum x-diffusive flux
                                                               !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
   real, dimension(:,:),   pointer :: df2d_y         => NULL() !< diagnostic vertical sum y-diffusive flux
                                                               !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
 !  real, dimension(:,:),   pointer :: df2d_conc_x    => NULL() !< diagnostic vertical sum x-diffusive content flux
-!                                                              !! [conc H m2 s-1 ~> conc m3 s-1 or conc kg s-1]
+!                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
 !  real, dimension(:,:),   pointer :: df2d_conc_y    => NULL() !< diagnostic vertical sum y-diffusive content flux
-!                                                              !! [conc H m2 s-1 ~> conc m3 s-1 or conc kg s-1]
+!                                                              !! [conc H L2 T-1 ~> conc m3 s-1 or conc kg s-1]
 
   real, dimension(:,:,:), pointer :: advection_xy   => NULL() !< convergence of lateral advective tracer fluxes
                                                               !! [conc H T-1 ~> conc m s-1 or conc kg m-2 s-1]
@@ -88,6 +89,7 @@ type, public :: tracer_type
                                                               !! timestep used for diagnostics [conc]
   real, dimension(:,:,:), pointer :: Trxh_prev      => NULL() !< layer integrated tracer concentration array
                                                               !! at a previous timestep used for diagnostics
+                                                              !! [conc H ~> conc m or conc kg m-2]
 
   character(len=32)               :: name                     !< tracer name used for diagnostics and error messages
   character(len=64)               :: units                    !< Physical dimensions of the tracer concentration
@@ -120,7 +122,7 @@ type, public :: tracer_type
 
   integer :: diag_form = 1  !< An integer indicating which template is to be used to label diagnostics.
   !>@{ Diagnostic IDs
-  integer :: id_tr = -1
+  integer :: id_tr = -1, id_tr_post_horzn = -1
   integer :: id_adx = -1, id_ady = -1, id_dfx = -1, id_dfy = -1
   integer :: id_lbd_bulk_dfx = -1, id_lbd_bulk_dfy = -1, id_lbd_dfx = -1, id_lbd_dfy = -1
   integer :: id_lbd_dfx_2d = -1  , id_lbd_dfy_2d = -1
@@ -371,7 +373,7 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
   type(tracer_type), pointer :: Tr=>NULL()
   integer :: i, j, k, is, ie, js, je, nz, m, m2, nTr_in
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   isd  = G%isd  ; ied  = G%ied  ; jsd  = G%jsd  ; jed  = G%jed
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
@@ -408,6 +410,10 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
         cmor_long_name=cmor_longname, cmor_units=Tr%cmor_units, &
         cmor_standard_name=cmor_long_std(cmor_longname))
     endif
+    Tr%id_tr_post_horzn = register_diag_field("ocean_model",                &
+      trim(name)//"_post_horzn", diag%axesTL, Time,                         &
+      trim(longname)//" after horizontal transport (advection/diffusion) "//&
+      "has occurred", trim(units))
     if (Tr%diag_form == 1) then
       Tr%id_adx = register_diag_field("ocean_model", trim(shortnm)//"_adx", &
           diag%axesCuL, Time, trim(flux_longname)//" advective zonal flux" , &
@@ -688,10 +694,10 @@ subroutine postALE_tracer_diagnostics(Reg, G, GV, diag, dt)
   type(diag_ctrl),            intent(in) :: diag !< regulates diagnostic output
   real,                       intent(in) :: dt   !< total time interval for these diagnostics [T ~> s]
 
-  real    :: work(SZI_(G),SZJ_(G),SZK_(G))
+  real    :: work(SZI_(G),SZJ_(G),SZK_(GV))
   real    :: Idt ! The inverse of the time step [T-1 ~> s-1]
   integer :: i, j, k, is, ie, js, je, nz, m, m2
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   ! The "if" is to avoid NaNs if the diagnostic is called for a zero length interval
   Idt = 0.0 ; if (dt /= 0.0) Idt = 1.0 / dt
@@ -708,9 +714,9 @@ subroutine postALE_tracer_diagnostics(Reg, G, GV, diag, dt)
 
 end subroutine postALE_tracer_diagnostics
 
-!> post_tracer_diagnostics does post_data calls for any diagnostics that are
-!! being handled via the tracer registry.
-subroutine post_tracer_diagnostics(Reg, h, diag_prev, diag, G, GV, dt)
+!> Post tracer diganostics when that should only be posted when MOM's state
+!! is self-consistent (also referred to as 'synchronized')
+subroutine post_tracer_diagnostics_at_sync(Reg, h, diag_prev, diag, G, GV, dt)
   type(ocean_grid_type),      intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type),    intent(in) :: GV   !< The ocean's vertical grid structure
   type(tracer_registry_type), pointer    :: Reg  !< pointer to the tracer registry
@@ -725,7 +731,7 @@ subroutine post_tracer_diagnostics(Reg, h, diag_prev, diag, G, GV, dt)
   real    :: Idt ! The inverse of the time step [T-1 ~> s-1]
   type(tracer_type), pointer :: Tr=>NULL()
   integer :: i, j, k, is, ie, js, je, nz, m
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   Idt = 0.; if (dt/=0.) Idt = 1.0 / dt ! The "if" is in case the diagnostic is called for a zero length interval
 
@@ -734,6 +740,7 @@ subroutine post_tracer_diagnostics(Reg, h, diag_prev, diag, G, GV, dt)
   call diag_copy_storage_to_diag(diag, diag_prev)
   do m=1,Reg%ntr ; if (Reg%Tr(m)%registry_diags) then
     Tr => Reg%Tr(m)
+    if (Tr%id_tr > 0) call post_data(Tr%id_tr, Tr%t, diag)
     if (Tr%id_tendency > 0) then
       work3d(:,:,:) = 0.0
       do k=1,nz ; do j=js,je ; do i=is,ie
@@ -759,7 +766,7 @@ subroutine post_tracer_diagnostics(Reg, h, diag_prev, diag, G, GV, dt)
   endif ; enddo
   call diag_restore_grids(diag)
 
-end subroutine post_tracer_diagnostics
+end subroutine post_tracer_diagnostics_at_sync
 
 !> Post the advective and diffusive tendencies
 subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
@@ -774,11 +781,11 @@ subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
   real    :: work2d(SZI_(G),SZJ_(G))
   type(tracer_type), pointer :: Tr=>NULL()
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   do m=1,Reg%ntr ; if (Reg%Tr(m)%registry_diags) then
     Tr => Reg%Tr(m)
-    if (Tr%id_tr > 0) call post_data(Tr%id_tr, Tr%t, diag)
+    if (Tr%id_tr_post_horzn> 0) call post_data(Tr%id_tr_post_horzn, Tr%t, diag)
     if (Tr%id_adx > 0) call post_data(Tr%id_adx, Tr%ad_x, diag, alt_h=h_diag)
     if (Tr%id_ady > 0) call post_data(Tr%id_ady, Tr%ad_y, diag, alt_h=h_diag)
     if (Tr%id_dfx > 0) call post_data(Tr%id_dfx, Tr%df_x, diag, alt_h=h_diag)
@@ -806,10 +813,8 @@ subroutine MOM_tracer_chksum(mesg, Tr, ntr, G)
   integer,                  intent(in) :: ntr    !< number of registered tracers
   type(ocean_grid_type),    intent(in) :: G      !< ocean grid structure
 
-  integer :: is, ie, js, je, nz
-  integer :: i, j, k, m
+  integer :: m
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
   do m=1,ntr
     call hchksum(Tr(m)%t, mesg//trim(Tr(m)%name), G%HI)
   enddo
@@ -817,19 +822,20 @@ subroutine MOM_tracer_chksum(mesg, Tr, ntr, G)
 end subroutine MOM_tracer_chksum
 
 !> Calculates and prints the global inventory of all tracers in the registry.
-subroutine MOM_tracer_chkinv(mesg, G, h, Tr, ntr)
-  character(len=*),                         intent(in) :: mesg !< message that appears on the chksum lines
-  type(ocean_grid_type),                    intent(in) :: G    !< ocean grid structure
-  type(tracer_type), dimension(:),          intent(in) :: Tr   !< array of all of registered tracers
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(in) :: h    !< Layer thicknesses
-  integer,                                  intent(in) :: ntr  !< number of registered tracers
+subroutine MOM_tracer_chkinv(mesg, G, GV, h, Tr, ntr)
+  character(len=*),                          intent(in) :: mesg !< message that appears on the chksum lines
+  type(ocean_grid_type),                     intent(in) :: G    !< ocean grid structure
+  type(verticalGrid_type),                   intent(in) :: GV   !< The ocean's vertical grid structure
+  type(tracer_type), dimension(:),           intent(in) :: Tr   !< array of all of registered tracers
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h    !< Layer thicknesses
+  integer,                                   intent(in) :: ntr  !< number of registered tracers
 
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: tr_inv !< Tracer inventory
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: tr_inv !< Tracer inventory
   real :: total_inv
   integer :: is, ie, js, je, nz
   integer :: i, j, k, m
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   do m=1,ntr
     do k=1,nz ; do j=js,je ; do i=is,ie
       tr_inv(i,j,k) = Tr(m)%t(i,j,k)*h(i,j,k)*G%US%L_to_m**2*G%areaT(i,j)*G%mask2dT(i,j)

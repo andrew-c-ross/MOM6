@@ -43,6 +43,9 @@ type, public :: PressureForce_FV_CS ; private
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                             !! timing of diagnostic output.
   logical :: useMassWghtInterp !< Use mass weighting in T/S interpolation
+  logical :: use_inaccurate_pgf_rho_anom !< If true, uses the older and less accurate
+                            !! method to calculate density anomalies, as used prior to
+                            !! March 2018.
   logical :: boundary_extrap !< Indicate whether high-order boundary
                             !! extrapolation should be used within boundary cells
 
@@ -58,6 +61,7 @@ type, public :: PressureForce_FV_CS ; private
                             !! the mean temperature gradient in the deterministic part of
                             !! the Stanley form of the Brankart correction.
   integer :: id_e_tidal = -1 !< Diagnostic identifier
+  integer :: id_tvar_sgs = -1 !< Diagnostic identifier
   type(tidal_forcing_CS), pointer :: tides_CSp => NULL() !< Tides control structure
 end type PressureForce_FV_CS
 
@@ -73,36 +77,36 @@ contains
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm, pbce, eta)
-  type(ocean_grid_type),                     intent(in)  :: G   !< Ocean grid structure
-  type(verticalGrid_type),                   intent(in)  :: GV  !< Vertical grid structure
-  type(unit_scale_type),                     intent(in)  :: US  !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  intent(in)  :: h   !< Layer thickness [H ~> kg/m2]
-  type(thermo_var_ptrs),                     intent(in)  :: tv  !< Thermodynamic variables
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(out) :: PFu !< Zonal acceleration [L T-2 ~> m s-2]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(out) :: PFv !< Meridional acceleration [L T-2 ~> m s-2]
-  type(PressureForce_FV_CS),                 pointer     :: CS  !< Finite volume PGF control structure
-  type(ALE_CS),                              pointer     :: ALE_CSp !< ALE control structure
+  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
+  type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
+  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)  :: h   !< Layer thickness [H ~> kg/m2]
+  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(out) :: PFu !< Zonal acceleration [L T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(out) :: PFv !< Meridional acceleration [L T-2 ~> m s-2]
+  type(PressureForce_FV_CS),                  pointer     :: CS  !< Finite volume PGF control structure
+  type(ALE_CS),                               pointer     :: ALE_CSp !< ALE control structure
   real, dimension(:,:),                      optional, pointer :: p_atm !< The pressure at the ice-ocean
                                                            !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  optional, intent(out) :: pbce !< The baroclinic pressure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional, intent(out) :: pbce !< The baroclinic pressure
                                                            !! anomaly in each layer due to eta anomalies
                                                            !! [L2 T-2 H-1 ~> m s-2 or m4 s-2 kg-1].
   real, dimension(SZI_(G),SZJ_(G)),          optional, intent(out) :: eta !< The bottom mass used to
                                                            !! calculate PFu and PFv [H ~> m or kg m-2], with any tidal
                                                            !! contributions or compressibility compensation.
   ! Local variables
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)+1) :: p ! Interface pressure [R L2 T-2 ~> Pa].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), target :: &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1) :: p ! Interface pressure [R L2 T-2 ~> Pa].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target :: &
     T_tmp, &    ! Temporary array of temperatures where layers that are lighter
                 ! than the mixed layer have the mixed layer's properties [degC].
     S_tmp       ! Temporary array of salinities where layers that are lighter
                 ! than the mixed layer have the mixed layer's properties [ppt].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     S_t, &      ! Top and bottom edge values for linear reconstructions
     S_b, &      ! of salinity within each layer [ppt].
     T_t, &      ! Top and bottom edge values for linear reconstructions
     T_b         ! of temperature within each layer [degC].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G))  :: &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     dza, &      ! The change in geopotential anomaly between the top and bottom
                 ! of a layer [L2 T-2 ~> m2 s-2].
     intp_dza    ! The vertical integral in depth of the pressure anomaly less
@@ -122,12 +126,12 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     intx_za     ! The zonal integral of the geopotential anomaly along the
                 ! interface below a layer, divided by the grid spacing [L2 T-2 ~> m2 s-2].
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)) :: &
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
     intx_dza    ! The change in intx_za through a layer [L2 T-2 ~> m2 s-2].
   real, dimension(SZI_(G),SZJB_(G)) :: &
     inty_za     ! The meridional integral of the geopotential anomaly along the
                 ! interface below a layer, divided by the grid spacing [L2 T-2 ~> m2 s-2].
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)) :: &
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
     inty_dza    ! The change in inty_za through a layer [L2 T-2 ~> m2 s-2].
   real :: p_ref(SZI_(G))     !   The pressure used to calculate the coordinate
                              ! density, [R L2 T-2 ~> Pa] (usually 2e7 Pa = 2000 dbar).
@@ -153,7 +157,7 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer :: i, j, k
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
@@ -413,25 +417,25 @@ end subroutine PressureForce_FV_nonBouss
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm, pbce, eta)
-  type(ocean_grid_type),                     intent(in)  :: G   !< Ocean grid structure
-  type(verticalGrid_type),                   intent(in)  :: GV  !< Vertical grid structure
-  type(unit_scale_type),                     intent(in)  :: US  !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  intent(in)  :: h   !< Layer thickness [H ~> m]
-  type(thermo_var_ptrs),                     intent(in)  :: tv  !< Thermodynamic variables
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(out) :: PFu !< Zonal acceleration [L T-2 ~> m s-2]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(out) :: PFv !< Meridional acceleration [L T-2 ~> m s-2]
-  type(PressureForce_FV_CS),                 pointer     :: CS  !< Finite volume PGF control structure
-  type(ALE_CS),                              pointer     :: ALE_CSp !< ALE control structure
+  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
+  type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
+  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)  :: h   !< Layer thickness [H ~> m]
+  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(out) :: PFu !< Zonal acceleration [L T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(out) :: PFv !< Meridional acceleration [L T-2 ~> m s-2]
+  type(PressureForce_FV_CS),                  pointer     :: CS  !< Finite volume PGF control structure
+  type(ALE_CS),                               pointer     :: ALE_CSp !< ALE control structure
   real, dimension(:,:),                      optional, pointer :: p_atm !< The pressure at the ice-ocean
                                                          !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  optional, intent(out) :: pbce !< The baroclinic pressure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional, intent(out) :: pbce !< The baroclinic pressure
                                                          !! anomaly in each layer due to eta anomalies
                                                          !! [L2 T-2 H-1 ~> m s-2 or m4 s-2 kg-1].
   real, dimension(SZI_(G),SZJ_(G)),          optional, intent(out) :: eta !< The bottom mass used to
                                                          !! calculate PFu and PFv [H ~> m or kg m-2], with any
                                                          !! tidal contributions or compressibility compensation.
   ! Local variables
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)+1) :: e ! Interface height in depth units [Z ~> m].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1) :: e ! Interface height in depth units [Z ~> m].
   real, dimension(SZI_(G),SZJ_(G))  :: &
     e_tidal, &  ! The bottom geopotential anomaly due to tidal forces from
                 ! astronomical sources and self-attraction and loading [Z ~> m].
@@ -457,12 +461,12 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
                 ! interface atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
     inty_dpa    ! The change in inty_pa through a layer [R L2 T-2 ~> Pa].
 
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), target :: &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target :: &
     T_tmp, &    ! Temporary array of temperatures where layers that are lighter
                 ! than the mixed layer have the mixed layer's properties [degC].
     S_tmp       ! Temporary array of salinities where layers that are lighter
                 ! than the mixed layer have the mixed layer's properties [ppt].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     S_t, S_b, T_t, T_b ! Top and bottom edge values for linear reconstructions
                        ! of salinity and temperature within each layer.
   real :: rho_in_situ(SZI_(G)) ! The in situ density [R ~> kg m-3].
@@ -479,13 +483,17 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   logical :: use_ALE         ! If true, use an ALE pressure reconstruction.
   logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
   type(thermo_var_ptrs) :: tv_tmp! A structure of temporary T & S.
-  real :: dTdi2, dTdj2       ! Differences in T variance [degC2]
+  real :: Tl(5)              ! copy and T in local stencil [degC]
+  real :: mn_T               ! mean of T in local stencil [degC]
+  real :: mn_T2              ! mean of T**2 in local stencil [degC]
+  real :: hl(5)              ! Copy of local stencil of H [H ~> m]
+  real :: r_sm_H             ! Reciprocal of sum of H in local stencil [H-1 ~> m-1]
   real, parameter :: C1_6 = 1.0/6.0
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, nkmb
   integer :: i, j, k
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
@@ -503,15 +511,43 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   if (CS%Stanley_T2_det_coeff>=0.) then
     if (.not. associated(tv%varT)) call safe_alloc_ptr(tv%varT, G%isd, G%ied, G%jsd, G%jed, GV%ke)
     do k=1, nz ; do j=js-1,je+1 ; do i=is-1,ie+1
-      ! SGS variance in i-direction [degC2]
-      dTdi2 = ( ( G%mask2dCu(I  ,j) * G%IdxCu(I  ,j) * ( tv%T(i+1,j,k) - tv%T(i,j,k) ) &
-                + G%mask2dCu(I-1,j) * G%IdxCu(I-1,j) * ( tv%T(i,j,k) - tv%T(i-1,j,k) ) &
-                ) * G%dxT(i,j) * 0.5 )**2
-      ! SGS variance in j-direction [degC2]
-      dTdj2 = ( ( G%mask2dCv(i,J  ) * G%IdyCv(i,J  ) * ( tv%T(i,j+1,k) - tv%T(i,j,k) ) &
-                + G%mask2dCv(i,J-1) * G%IdyCv(i,J-1) * ( tv%T(i,j,k) - tv%T(i,j-1,k) ) &
-                ) * G%dyT(i,j) * 0.5 )**2
-      tv%varT(i,j,k) = CS%Stanley_T2_det_coeff * 0.5 * ( dTdi2 + dTdj2 )
+      ! Strictly speaking we should estimate the *horizontal* grid-scale variance
+      ! but neither of the following blocks make a rotation to the horizontal
+      ! and instead work along coordinate.
+
+      ! This block calculates a simple |delta T| along coordinates and does
+      ! not allow vanishing layer thicknesses or layers tracking topography
+      !! SGS variance in i-direction [degC2]
+      !dTdi2 = ( ( G%mask2dCu(I  ,j) * G%IdxCu(I  ,j) * ( tv%T(i+1,j,k) - tv%T(i,j,k) ) &
+      !          + G%mask2dCu(I-1,j) * G%IdxCu(I-1,j) * ( tv%T(i,j,k) - tv%T(i-1,j,k) ) &
+      !          ) * G%dxT(i,j) * 0.5 )**2
+      !! SGS variance in j-direction [degC2]
+      !dTdj2 = ( ( G%mask2dCv(i,J  ) * G%IdyCv(i,J  ) * ( tv%T(i,j+1,k) - tv%T(i,j,k) ) &
+      !          + G%mask2dCv(i,J-1) * G%IdyCv(i,J-1) * ( tv%T(i,j,k) - tv%T(i,j-1,k) ) &
+      !          ) * G%dyT(i,j) * 0.5 )**2
+      !tv%varT(i,j,k) = CS%Stanley_T2_det_coeff * 0.5 * ( dTdi2 + dTdj2 )
+
+      ! This block does a thickness weighted variance calculation and helps control for
+      ! extreme gradients along layers which are vanished against topography. It is
+      ! still a poor approximation in the interior when coordinates are strongly tilted.
+      hl(1) = h(i,j,k) * G%mask2dT(i,j)
+      hl(2) = h(i-1,j,k) * G%mask2dCu(I-1,j)
+      hl(3) = h(i+1,j,k) * G%mask2dCu(I,j)
+      hl(4) = h(i,j-1,k) * G%mask2dCv(i,J-1)
+      hl(5) = h(i,j+1,k) * G%mask2dCv(i,J)
+      r_sm_H = 1. / ( ( hl(1) + ( ( hl(2) + hl(3) ) + ( hl(4) + hl(5) ) ) ) + GV%H_subroundoff )
+      ! Mean of T
+      Tl(1) = tv%T(i,j,k) ; Tl(2) = tv%T(i-1,j,k) ; Tl(3) = tv%T(i+1,j,k)
+      Tl(4) = tv%T(i,j-1,k) ; Tl(5) = tv%T(i,j+1,k)
+      mn_T = ( hl(1)*Tl(1) + ( ( hl(2)*Tl(2) + hl(3)*Tl(3) ) + ( hl(4)*Tl(4) + hl(5)*Tl(5) ) ) ) * r_sm_H
+      ! Adjust T vectors to have zero mean
+      Tl(:) = Tl(:) - mn_T ; mn_T = 0.
+      ! Variance of T
+      mn_T2 = ( hl(1)*Tl(1)*Tl(1) + ( ( hl(2)*Tl(2)*Tl(2) + hl(3)*Tl(3)*Tl(3) ) &
+                                    + ( hl(4)*Tl(4)*Tl(4) + hl(5)*Tl(5)*Tl(5) ) ) ) * r_sm_H
+      ! Variance should be positive but round-off can violate this. Calculating
+      ! variance directly would fix this but requires more operations.
+      tv%varT(i,j,k) = CS%Stanley_T2_det_coeff * max(0., mn_T2)
     enddo ; enddo ; enddo
   endif
 
@@ -551,7 +587,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
     enddo ; enddo
   endif
   !$OMP parallel do default(shared)
-  do j=Jsq,Jeq+1; do k=nz,1,-1 ; do i=Isq,Ieq+1
+  do j=Jsq,Jeq+1 ; do k=nz,1,-1 ; do i=Isq,Ieq+1
     e(i,j,K) = e(i,j,K+1) + h(i,j,k)*GV%H_to_Z
   enddo ; enddo ; enddo
 
@@ -663,7 +699,8 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
           call int_density_dz_generic_plm(k, tv,  T_t, T_b, S_t, S_b, e, &
                     rho_ref, CS%Rho0, GV%g_Earth, dz_neglect, G%bathyT, &
                     G%HI, GV, tv%eqn_of_state, US, dpa, intz_dpa, intx_dpa, inty_dpa, &
-                    useMassWghtInterp=CS%useMassWghtInterp)
+                    useMassWghtInterp=CS%useMassWghtInterp, &
+                    use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom)
         elseif ( CS%Recon_Scheme == 2 ) then
           call int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
                     rho_ref, CS%Rho0, GV%g_Earth, dz_neglect, G%bathyT, &
@@ -758,6 +795,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, p_atm
   endif
 
   if (CS%id_e_tidal>0) call post_data(CS%id_e_tidal, e_tidal, CS%diag)
+  if (CS%id_tvar_sgs>0) call post_data(CS%id_tvar_sgs, tv%varT, CS%diag)
 
 end subroutine PressureForce_FV_Bouss
 
@@ -804,6 +842,9 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, tides_CS
                  "If true, use mass weighting when interpolating T/S for "//&
                  "integrals near the bathymetry in FV pressure gradient "//&
                  "calculations.", default=.false.)
+  call get_param(param_file, mdl, "USE_INACCURATE_PGF_RHO_ANOM", CS%use_inaccurate_pgf_rho_anom, &
+                 "If true, use a form of the PGF that uses the reference density "//&
+                 "in an inaccurate way. This is not recommended.", default=.false.)
   call get_param(param_file, mdl, "RECONSTRUCT_FOR_PRESSURE", CS%reconstruct, &
                  "If True, use vertical reconstruction of T & S within "//&
                  "the integrals of the FV pressure gradient calculation. "//&
@@ -826,6 +867,10 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, tides_CS
                  "the mean temperature gradient in the deterministic part of "// &
                  "the Stanley form of the Brankart correction. "// &
                  "Negative values disable the scheme.", units="nondim", default=-1.0)
+  if (CS%Stanley_T2_det_coeff>=0.) then
+    CS%id_tvar_sgs = register_diag_field('ocean_model', 'tvar_sgs_pgf', diag%axesTL, &
+        Time, 'SGS temperature variance used in PGF', 'degC2')
+  endif
   if (CS%tides) then
     CS%id_e_tidal = register_diag_field('ocean_model', 'e_tidal', diag%axesT1, &
         Time, 'Tidal Forcing Astronomical and SAL Height Anomaly', 'meter', conversion=US%Z_to_m)

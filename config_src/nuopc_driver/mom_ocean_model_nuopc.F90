@@ -39,6 +39,7 @@ use MOM_time_manager,        only : time_type, get_time, set_time, operator(>)
 use MOM_time_manager,        only : operator(+), operator(-), operator(*), operator(/)
 use MOM_time_manager,        only : operator(/=), operator(<=), operator(>=)
 use MOM_time_manager,        only : operator(<), real_to_time_type, time_type_to_real
+use time_interp_external_mod,only : time_interp_external_init
 use MOM_tracer_flow_control, only : call_tracer_register, tracer_flow_control_init
 use MOM_tracer_flow_control, only : call_tracer_flux_init
 use MOM_unit_scaling,        only : unit_scale_type
@@ -143,7 +144,7 @@ type, public :: ocean_state_type ; private
 
   integer :: nstep = 0        !< The number of calls to update_ocean.
   logical :: use_ice_shelf    !< If true, the ice shelf model is enabled.
-  logical :: use_waves        !< If true use wave coupling.
+  logical,public :: use_waves !< If true use wave coupling.
 
   logical :: icebergs_alter_ocean !< If true, the icebergs can change ocean the
                               !! ocean dynamics and forcing fluxes.
@@ -203,7 +204,7 @@ type, public :: ocean_state_type ; private
   type(marine_ice_CS), pointer :: &
     marine_ice_CSp => NULL()  !< A pointer to the control structure for the
                               !! marine ice effects module.
-  type(wave_parameters_cs), pointer :: &
+  type(wave_parameters_cs), pointer, public :: &
     Waves !< A structure containing pointers to the surface wave fields
   type(surface_forcing_CS), pointer :: &
     forcing_CSp => NULL()     !< A pointer to the MOM forcing control structure
@@ -266,6 +267,8 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
 
   OS%is_ocean_pe = Ocean_sfc%is_ocean_pe
   if (.not.OS%is_ocean_pe) return
+
+  call time_interp_external_init
 
   OS%Time = Time_in
   call initialize_MOM(OS%Time, Time_init, param_file, OS%dirs, OS%MOM_CSp, &
@@ -385,6 +388,9 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
        "If true, enables surface wave modules.", default=.false.)
   if (OS%use_waves) then
     call MOM_wave_interface_init(OS%Time, OS%grid, OS%GV, OS%US, param_file, OS%Waves, OS%diag)
+    call get_param(param_file,mdl,"SURFBAND_WAVENUMBERS",OS%Waves%WaveNum_Cen, &
+           "Central wavenumbers for surface Stokes drift bands.",units='rad/m', &
+           default=0.12566)
   else
     call MOM_wave_interface_init_lite(param_file)
   endif
@@ -569,7 +575,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
   call set_net_mass_forcing(OS%fluxes, OS%forces, OS%grid, OS%US)
 
   if (OS%use_waves) then
-    call Update_Surface_Waves(OS%grid, OS%GV, OS%US, OS%time, ocean_coupling_time_step, OS%waves)
+    call Update_Surface_Waves(OS%grid, OS%GV, OS%US, OS%time, ocean_coupling_time_step, OS%waves, OS%forces)
   endif
 
   if (OS%nstep==0) then
@@ -668,7 +674,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
 end subroutine update_ocean_model
 
 !> This subroutine writes out the ocean model restart file.
-subroutine ocean_model_restart(OS, timestamp, restartname)
+subroutine ocean_model_restart(OS, timestamp, restartname, num_rest_files)
   type(ocean_state_type),     pointer    :: OS !< A pointer to the structure containing the
                                                !! internal ocean state being saved to a restart file
   character(len=*), optional, intent(in) :: timestamp !< An optional timestamp string that should be
@@ -676,6 +682,7 @@ subroutine ocean_model_restart(OS, timestamp, restartname)
   character(len=*), optional, intent(in) :: restartname !< Name of restart file to use
                                                !! This option distinguishes the cesm interface from the
                                                !! non-cesm interface
+  integer, optional, intent(out)         :: num_rest_files !< number of restart files written
 
   if (.not.MOM_state_is_synchronized(OS%MOM_CSp)) &
       call MOM_error(WARNING, "End of MOM_main reached with inconsistent "//&
@@ -687,7 +694,7 @@ subroutine ocean_model_restart(OS, timestamp, restartname)
 
   if (present(restartname)) then
      call save_restart(OS%dirs%restart_output_dir, OS%Time, OS%grid, &
-          OS%restart_CSp, GV=OS%GV, filename=restartname)
+          OS%restart_CSp, GV=OS%GV, filename=restartname, num_rest_files=num_rest_files)
      call forcing_save_restart(OS%forcing_CSp, OS%grid, OS%Time, &
           OS%dirs%restart_output_dir) ! Is this needed?
      if (OS%use_ice_shelf) then
@@ -729,7 +736,7 @@ subroutine ocean_model_end(Ocean_sfc, Ocean_state, Time, write_restart)
   type(time_type),         intent(in)    :: Time        !< The model time, used for writing restarts.
   logical,                 intent(in)    :: write_restart !< true => write restart file
 
-  call ocean_model_save_restart(Ocean_state, Time)
+  if(write_restart)call ocean_model_save_restart(Ocean_state, Time)
   call diag_mediator_end(Time, Ocean_state%diag, end_diag_manager=.true.)
   call MOM_end(Ocean_state%MOM_CSp)
   if (Ocean_state%use_ice_shelf) call ice_shelf_end(Ocean_state%Ice_shelf_CSp)

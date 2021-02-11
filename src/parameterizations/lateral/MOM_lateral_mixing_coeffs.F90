@@ -188,12 +188,12 @@ end subroutine calc_depth_function
 
 !> Calculates and stores the non-dimensional resolution functions
 subroutine calc_resoln_function(h, tv, G, GV, US, CS)
-  type(ocean_grid_type),                    intent(inout) :: G  !< Ocean grid structure
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(in)    :: h  !< Layer thickness [H ~> m or kg m-2]
-  type(thermo_var_ptrs),                    intent(in)    :: tv !< Thermodynamic variables
-  type(verticalGrid_type),                  intent(in)    :: GV !< Vertical grid structure
-  type(unit_scale_type),                    intent(in)    :: US !< A dimensional unit scaling type
-  type(VarMix_CS),                          pointer       :: CS !< Variable mixing coefficients
+  type(ocean_grid_type),                     intent(inout) :: G  !< Ocean grid structure
+  type(verticalGrid_type),                   intent(in)    :: GV !< Vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)    :: h  !< Layer thickness [H ~> m or kg m-2]
+  type(thermo_var_ptrs),                     intent(in)    :: tv !< Thermodynamic variables
+  type(unit_scale_type),                     intent(in)    :: US !< A dimensional unit scaling type
+  type(VarMix_CS),                           pointer       :: CS !< Variable mixing coefficients
 
   ! Local variables
   ! Depending on the power-function being used, dimensional rescaling may be limited, so some
@@ -205,7 +205,7 @@ subroutine calc_resoln_function(h, tv, G, GV, US, CS)
   integer :: power_2
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
   if (.not. associated(CS)) call MOM_error(FATAL, "calc_resoln_function:"// &
@@ -434,19 +434,19 @@ end subroutine calc_resoln_function
 !> Calculates and stores functions of isopycnal slopes, e.g. Sx, Sy, S*N, mostly used in the Visbeck et al.
 !! style scaling of diffusivity
 subroutine calc_slope_functions(h, tv, dt, G, GV, US, CS, OBC)
-  type(ocean_grid_type),                    intent(inout) :: G  !< Ocean grid structure
-  type(verticalGrid_type),                  intent(in)    :: GV !< Vertical grid structure
-  type(unit_scale_type),                    intent(in)    :: US !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(inout) :: h  !< Layer thickness [H ~> m or kg m-2]
-  type(thermo_var_ptrs),                    intent(in)    :: tv !< Thermodynamic variables
-  real,                                     intent(in)    :: dt !< Time increment [T ~> s]
-  type(VarMix_CS),                          pointer       :: CS !< Variable mixing coefficients
-  type(ocean_OBC_type),           optional, pointer       :: OBC !< Open boundaries control structure.
+  type(ocean_grid_type),                     intent(inout) :: G  !< Ocean grid structure
+  type(verticalGrid_type),                   intent(in)    :: GV !< Vertical grid structure
+  type(unit_scale_type),                     intent(in)    :: US !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(inout) :: h  !< Layer thickness [H ~> m or kg m-2]
+  type(thermo_var_ptrs),                     intent(in)    :: tv !< Thermodynamic variables
+  real,                                      intent(in)    :: dt !< Time increment [T ~> s]
+  type(VarMix_CS),                           pointer       :: CS !< Variable mixing coefficients
+  type(ocean_OBC_type),            optional, pointer       :: OBC !< Open boundaries control structure.
   ! Local variables
-  real, dimension(SZI_(G), SZJ_(G), SZK_(G)+1) :: &
+  real, dimension(SZI_(G), SZJ_(G),SZK_(GV)+1) :: &
     e             ! The interface heights relative to mean sea level [Z ~> m].
-  real, dimension(SZIB_(G), SZJ_(G), SZK_(G)+1) :: N2_u ! Square of Brunt-Vaisala freq at u-points [T-2 ~> s-2]
-  real, dimension(SZI_(G), SZJB_(G), SZK_(G)+1) :: N2_v ! Square of Brunt-Vaisala freq at v-points [T-2 ~> s-2]
+  real, dimension(SZIB_(G), SZJ_(G),SZK_(GV)+1) :: N2_u ! Square of Brunt-Vaisala freq at u-points [T-2 ~> s-2]
+  real, dimension(SZI_(G), SZJB_(G),SZK_(GV)+1) :: N2_v ! Square of Brunt-Vaisala freq at v-points [T-2 ~> s-2]
 
   if (.not. associated(CS)) call MOM_error(FATAL, "MOM_lateral_mixing_coeffs.F90, calc_slope_functions:"//&
          "Module must be initialized before it is used.")
@@ -479,18 +479,18 @@ end subroutine calc_slope_functions
 
 !> Calculates factors used when setting diffusivity coefficients similar to Visbeck et al.
 subroutine calc_Visbeck_coeffs(h, slope_x, slope_y, N2_u, N2_v, G, GV, US, CS, OBC)
-  type(ocean_grid_type),                       intent(inout) :: G  !< Ocean grid structure
-  type(verticalGrid_type),                     intent(in)    :: GV !< Vertical grid structure
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),    intent(in)    :: h  !< Layer thickness [H ~> m or kg m-2]
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)+1), intent(in)    :: slope_x !< Zonal isoneutral slope
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)+1), intent(in)    :: N2_u    !< Buoyancy (Brunt-Vaisala) frequency
-                                                                        !! at u-points [T-2 ~> s-2]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)+1), intent(in)    :: slope_y !< Meridional isoneutral slope
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)+1), intent(in)    :: N2_v    !< Buoyancy (Brunt-Vaisala) frequency
-                                                                        !! at v-points [T-2 ~> s-2]
-  type(unit_scale_type),                       intent(in)    :: US !< A dimensional unit scaling type
-  type(VarMix_CS),                             pointer       :: CS !< Variable mixing coefficients
-  type(ocean_OBC_type),              optional, pointer       :: OBC !< Open boundaries control structure.
+  type(ocean_grid_type),                        intent(inout) :: G  !< Ocean grid structure
+  type(verticalGrid_type),                      intent(in)    :: GV !< Vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),    intent(in)    :: h  !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: slope_x !< Zonal isoneutral slope
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: N2_u    !< Buoyancy (Brunt-Vaisala) frequency
+                                                                         !! at u-points [T-2 ~> s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(in)    :: slope_y !< Meridional isoneutral slope
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1), intent(in)    :: N2_v    !< Buoyancy (Brunt-Vaisala) frequency
+                                                                         !! at v-points [T-2 ~> s-2]
+  type(unit_scale_type),                        intent(in)    :: US !< A dimensional unit scaling type
+  type(VarMix_CS),                              pointer       :: CS !< Variable mixing coefficients
+  type(ocean_OBC_type),               optional, pointer       :: OBC !< Open boundaries control structure.
 
   ! Local variables
   real :: S2            ! Interface slope squared [nondim]
@@ -514,7 +514,7 @@ subroutine calc_Visbeck_coeffs(h, slope_x, slope_y, N2_u, N2_v, G, GV, US, CS, O
   if (.not. associated(CS%SN_v)) call MOM_error(FATAL, "calc_slope_function:"// &
          "%SN_v is not associated with use_variable_mixing.")
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   local_open_u_BC = .false.
   local_open_v_BC = .false.
@@ -644,15 +644,15 @@ end subroutine calc_Visbeck_coeffs
 !> The original calc_slope_function() that calculated slopes using
 !! interface positions only, not accounting for density variations.
 subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slopes, OBC)
-  type(ocean_grid_type),                      intent(inout) :: G  !< Ocean grid structure
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),   intent(inout) :: h  !< Layer thickness [H ~> m or kg m-2]
-  type(verticalGrid_type),                    intent(in)    :: GV !< Vertical grid structure
-  type(unit_scale_type),                      intent(in)    :: US !< A dimensional unit scaling type
-  type(VarMix_CS),                            pointer       :: CS !< Variable mixing coefficients
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)+1), intent(in)    :: e  !< Interface position [Z ~> m]
-  logical,                                    intent(in)    :: calculate_slopes !< If true, calculate slopes internally
-                                                                  !! otherwise use slopes stored in CS
-  type(ocean_OBC_type),             optional, pointer       :: OBC !< Open boundaries control structure.
+  type(ocean_grid_type),                       intent(inout) :: G  !< Ocean grid structure
+  type(verticalGrid_type),                     intent(in)    :: GV !< Vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),   intent(inout) :: h  !< Layer thickness [H ~> m or kg m-2]
+  type(unit_scale_type),                       intent(in)    :: US !< A dimensional unit scaling type
+  type(VarMix_CS),                             pointer       :: CS !< Variable mixing coefficients
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: e  !< Interface position [Z ~> m]
+  logical,                                     intent(in)    :: calculate_slopes !< If true, calculate slopes
+                                                                   !! internally otherwise use slopes stored in CS
+  type(ocean_OBC_type),              optional, pointer       :: OBC !< Open boundaries control structure.
   ! Local variables
   real :: E_x(SZIB_(G), SZJ_(G))  ! X-slope of interface at u points [nondim] (for diagnostics)
   real :: E_y(SZI_(G), SZJB_(G))  ! Y-slope of interface at v points [nondim] (for diagnostics)
@@ -667,8 +667,8 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
   integer :: is, ie, js, je, nz
   integer :: i, j, k, kb_max
   integer :: l_seg
-  real    :: S2N2_u_local(SZIB_(G), SZJ_(G),SZK_(G))
-  real    :: S2N2_v_local(SZI_(G), SZJB_(G),SZK_(G))
+  real    :: S2N2_u_local(SZIB_(G), SZJ_(G),SZK_(GV))
+  real    :: S2N2_v_local(SZI_(G), SZJB_(G),SZK_(GV))
   logical :: local_open_u_BC, local_open_v_BC
 
   if (.not. associated(CS)) call MOM_error(FATAL, "calc_slope_function:"// &
@@ -679,7 +679,7 @@ subroutine calc_slope_functions_using_just_e(h, G, GV, US, CS, e, calculate_slop
   if (.not. associated(CS%SN_v)) call MOM_error(FATAL, "calc_slope_function:"// &
          "%SN_v is not associated with use_variable_mixing.")
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   local_open_u_BC = .false.
   local_open_v_BC = .false.
@@ -809,9 +809,7 @@ subroutine calc_QG_Leith_viscosity(CS, G, GV, US, h, k, div_xx_dx, div_xx_dy, vo
   type(ocean_grid_type),                     intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),                   intent(in)  :: GV !< The ocean's vertical grid structure.
   type(unit_scale_type),                     intent(in)  :: US   !< A dimensional unit scaling type
-! real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), intent(in)  :: u  !< Zonal flow [L T-1 ~> m s-1]
-! real, dimension(SZI_(G),SZJB_(G),SZK_(G)), intent(in)  :: v  !< Meridional flow [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)),  intent(inout) :: h !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(inout) :: h !< Layer thickness [H ~> m or kg m-2]
   integer,                                   intent(in)  :: k  !< Layer for which to calculate vorticity magnitude
   real, dimension(SZIB_(G),SZJ_(G)),         intent(in)  :: div_xx_dx  !< x-derivative of horizontal divergence
                                                                  !! (d/dx(du/dx + dv/dy)) [L-1 T-1 ~> m-1 s-1]
@@ -821,15 +819,6 @@ subroutine calc_QG_Leith_viscosity(CS, G, GV, US, h, k, div_xx_dx, div_xx_dy, vo
                                                                  !! (d/dx(dv/dx - du/dy)) [L-1 T-1 ~> m-1 s-1]
   real, dimension(SZIB_(G),SZJ_(G)),         intent(inout) :: vort_xy_dy !< y-derivative of vertical vorticity
                                                                  !! (d/dy(dv/dx - du/dy)) [L-1 T-1 ~> m-1 s-1]
-!  real, dimension(SZI_(G),SZJ_(G)),          intent(out) :: Leith_Kh_h !< Leith Laplacian viscosity
-                                                                 !! at h-points [L2 T-1 ~> m2 s-1]
-!  real, dimension(SZIB_(G),SZJB_(G)),        intent(out) :: Leith_Kh_q !< Leith Laplacian viscosity
-                                                                 !! at q-points [L2 T-1 ~> m2 s-1]
-!  real, dimension(SZI_(G),SZJ_(G)),          intent(out) :: Leith_Ah_h !< Leith bi-harmonic viscosity
-                                                                 !! at h-points [L4 T-1 ~> m4 s-1]
-!  real, dimension(SZIB_(G),SZJB_(G)),        intent(out) :: Leith_Ah_q !< Leith bi-harmonic viscosity
-                                                                 !! at q-points [L4 T-1 ~> m4 s-1]
-
   ! Local variables
   real, dimension(SZI_(G),SZJB_(G)) :: &
     dslopey_dz, & ! z-derivative of y-slope at v-points [Z-1 ~> m-1]
@@ -853,20 +842,13 @@ subroutine calc_QG_Leith_viscosity(CS, G, GV, US, h, k, div_xx_dx, div_xx_dy, vo
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  nz = G%ke
+  nz = GV%ke
 
   inv_PI3 = 1.0/((4.0*atan(1.0))**3)
 
-  !### I believe this halo update to be unnecessary. -RWH
-  call pass_var(h, G%Domain)
-
   if ((k > 1) .and. (k < nz)) then
 
-  ! Add in stretching term for the QG Leith vsicosity
-!  if (CS%use_QG_Leith) then
-
-    !### do j=js-1,je+1 ; do I=is-2,Ieq+1
-    do j=js-2,Jeq+2 ; do I=is-2,Ieq+1
+    do j=js-1,je+1 ; do I=is-2,Ieq+1
       h_at_slope_above = 2. * ( h(i,j,k-1) * h(i+1,j,k-1) ) * ( h(i,j,k) * h(i+1,j,k) ) / &
                          ( ( h(i,j,k-1) * h(i+1,j,k-1) ) * ( h(i,j,k) + h(i+1,j,k) ) &
                          + ( h(i,j,k) * h(i+1,j,k) ) * ( h(i,j,k-1) + h(i+1,j,k-1) ) + GV%H_subroundoff )
@@ -878,8 +860,7 @@ subroutine calc_QG_Leith_viscosity(CS, G, GV, US, h, k, div_xx_dx, div_xx_dy, vo
       h_at_u(I,j) = 2. * ( h_at_slope_above * h_at_slope_below ) * Ih
     enddo ; enddo
 
-    !### do J=js-2,Jeq+1 ; do i=is-1,ie+1
-    do J=js-2,Jeq+1 ; do i=is-2,Ieq+2
+    do J=js-2,Jeq+1 ; do i=is-1,ie+1
       h_at_slope_above = 2. * ( h(i,j,k-1) * h(i,j+1,k-1) ) * ( h(i,j,k) * h(i,j+1,k) ) / &
                          ( ( h(i,j,k-1) * h(i,j+1,k-1) ) * ( h(i,j,k) + h(i,j+1,k) ) &
                          + ( h(i,j,k) * h(i,j+1,k) ) * ( h(i,j,k-1) + h(i,j+1,k-1) ) + GV%H_subroundoff )
@@ -891,8 +872,7 @@ subroutine calc_QG_Leith_viscosity(CS, G, GV, US, h, k, div_xx_dx, div_xx_dy, vo
       h_at_v(i,J) = 2. * ( h_at_slope_above * h_at_slope_below ) * Ih
     enddo ; enddo
 
-    !### do J=js-1,je ; do i=is-1,Ieq+1
-    do J=js-2,Jeq+1 ; do i=is-1,Ieq+1
+    do J=js-1,je ; do i=is-1,Ieq+1
       f = 0.5 * ( G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J) )
       vort_xy_dx(i,J) = vort_xy_dx(i,J) - f * US%L_to_Z * &
             ( ( h_at_u(I,j) * dslopex_dz(I,j) + h_at_u(I-1,j+1) * dslopex_dz(I-1,j+1) ) &
@@ -900,33 +880,25 @@ subroutine calc_QG_Leith_viscosity(CS, G, GV, US, h, k, div_xx_dx, div_xx_dy, vo
               ( ( h_at_u(I,j) + h_at_u(I-1,j+1) ) + ( h_at_u(I-1,j) + h_at_u(I,j+1) ) + GV%H_subroundoff)
     enddo ; enddo
 
-    !### do j=js-1,Jeq+1 ; do I=is-1,ie
-    do j=js-1,Jeq+1 ; do I=is-2,Ieq+1
+    do j=js-1,Jeq+1 ; do I=is-1,ie
       f = 0.5 * ( G%CoriolisBu(I,J) + G%CoriolisBu(I,J-1) )
-      !### I think that this should be vort_xy_dy(I,j) = vort_xy_dy(I,j) - f * &
-      vort_xy_dy(I,j) = vort_xy_dx(I,j) - f * US%L_to_Z * &
+      vort_xy_dy(I,j) = vort_xy_dy(I,j) - f * US%L_to_Z * &
             ( ( h_at_v(i,J) * dslopey_dz(i,J) + h_at_v(i+1,J-1) * dslopey_dz(i+1,J-1) ) &
             + ( h_at_v(i,J-1) * dslopey_dz(i,J-1) + h_at_v(i+1,J) * dslopey_dz(i+1,J) ) ) / &
               ( ( h_at_v(i,J) + h_at_v(i+1,J-1) ) + ( h_at_v(i,J-1) + h_at_v(i+1,J) ) + GV%H_subroundoff)
     enddo ; enddo
   endif ! k > 1
 
-  !### I believe this halo update to be unnecessary. -RWH
-  call pass_vector(vort_xy_dy,vort_xy_dx,G%Domain)
-
   if (CS%use_QG_Leith_GM) then
 
     do j=js,je ; do I=is-1,Ieq
-      !### These expressions are not rotationally symmetric.  Add parentheses and regroup, as in:
-    ! grad_vort_mag_u(I,j) = SQRT(vort_xy_dy(I,j)**2 + (0.25*((vort_xy_dx(i,J) + vort_xy_dx(i+1,J-1)) +
-    !                                                         (vort_xy_dx(i+1,J) + vort_xy_dx(i,J-1))))**2 )
-      grad_vort_mag_u(I,j) = SQRT(vort_xy_dy(I,j)**2  + (0.25*(vort_xy_dx(i,J) + vort_xy_dx(i+1,J) &
-                                                             + vort_xy_dx(i,J-1) + vort_xy_dx(i+1,J-1)))**2)
-      grad_div_mag_u(I,j) = SQRT(div_xx_dx(I,j)**2  + (0.25*(div_xx_dy(i,J) + div_xx_dy(i+1,J) &
-                                                           + div_xx_dy(i,J-1) + div_xx_dy(i+1,J-1)))**2)
+      grad_vort_mag_u(I,j) = SQRT(vort_xy_dy(I,j)**2  + (0.25*((vort_xy_dx(i,J) + vort_xy_dx(i+1,J-1)) &
+                                                             + (vort_xy_dx(i+1,J) + vort_xy_dx(i,J-1))))**2)
+      grad_div_mag_u(I,j) = SQRT(div_xx_dx(I,j)**2  + (0.25*((div_xx_dy(i,J) + div_xx_dy(i+1,J-1)) &
+                                                           + (div_xx_dy(i+1,J) + div_xx_dy(i,J-1))))**2)
       if (CS%use_beta_in_QG_Leith) then
-        beta_u(I,j) = sqrt( (0.5*(G%dF_dx(i,j)+G%dF_dx(i+1,j))**2) + &
-                                      (0.5*(G%dF_dy(i,j)+G%dF_dy(i+1,j))**2) )
+        beta_u(I,j) = sqrt((0.5*(G%dF_dx(i,j)+G%dF_dx(i+1,j))**2) + &
+                          (0.5*(G%dF_dy(i,j)+G%dF_dy(i+1,j))**2))
         CS%KH_u_QG(I,j,k) = MIN(grad_vort_mag_u(I,j) + grad_div_mag_u(I,j), 3.0*beta_u(I,j)) * &
                             CS%Laplac3_const_u(I,j) * inv_PI3
       else
@@ -936,14 +908,13 @@ subroutine calc_QG_Leith_viscosity(CS, G, GV, US, h, k, div_xx_dx, div_xx_dy, vo
     enddo ; enddo
 
     do J=js-1,Jeq ; do i=is,ie
-      !### These expressions are not rotationally symmetric.  Add parentheses and regroup.
-      grad_vort_mag_v(i,J) = SQRT(vort_xy_dx(i,J)**2  + (0.25*(vort_xy_dy(I,j) + vort_xy_dy(I-1,j) &
-                                                             + vort_xy_dy(I,j+1) + vort_xy_dy(I-1,j+1)))**2)
-      grad_div_mag_v(i,J) = SQRT(div_xx_dy(i,J)**2  + (0.25*(div_xx_dx(I,j) + div_xx_dx(I-1,j) &
-                                                           + div_xx_dx(I,j+1) + div_xx_dx(I-1,j+1)))**2)
+      grad_vort_mag_v(i,J) = SQRT(vort_xy_dx(i,J)**2  + (0.25*((vort_xy_dy(I,j) + vort_xy_dy(I-1,j+1)) &
+                                                             + (vort_xy_dy(I,j+1) + vort_xy_dy(I-1,j))))**2)
+      grad_div_mag_v(i,J) = SQRT(div_xx_dy(i,J)**2  + (0.25*((div_xx_dx(I,j) + div_xx_dx(I-1,j+1)) &
+                                                           + (div_xx_dx(I,j+1) + div_xx_dx(I-1,j))))**2)
       if (CS%use_beta_in_QG_Leith) then
-        beta_v(i,J) = sqrt( (0.5*(G%dF_dx(i,j)+G%dF_dx(i,j+1))**2) + &
-                            (0.5*(G%dF_dy(i,j)+G%dF_dy(i,j+1))**2) )
+        beta_v(i,J) = sqrt((0.5*(G%dF_dx(i,j)+G%dF_dx(i,j+1))**2) + &
+                          (0.5*(G%dF_dy(i,j)+G%dF_dy(i,j+1))**2))
         CS%KH_v_QG(i,J,k) = MIN(grad_vort_mag_v(i,J) + grad_div_mag_v(i,J), 3.0*beta_v(i,J)) * &
                             CS%Laplac3_const_v(i,J) * inv_PI3
       else
@@ -1088,7 +1059,7 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
                  "The depth below which N2 is monotonized to avoid stratification "//&
                  "artifacts from altering the equivalent barotropic mode structure.",&
                  units="m", default=2000., scale=US%m_to_Z)
-    allocate(CS%ebt_struct(isd:ied,jsd:jed,G%ke)) ; CS%ebt_struct(:,:,:) = 0.0
+    allocate(CS%ebt_struct(isd:ied,jsd:jed,GV%ke)) ; CS%ebt_struct(:,:,:) = 0.0
   endif
 
   if (KhTr_Slope_Cff>0. .or. KhTh_Slope_Cff>0.) then
@@ -1102,8 +1073,8 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
 
   if (CS%use_stored_slopes) then
     in_use = .true.
-    allocate(CS%slope_x(IsdB:IedB,jsd:jed,G%ke+1)) ; CS%slope_x(:,:,:) = 0.0
-    allocate(CS%slope_y(isd:ied,JsdB:JedB,G%ke+1)) ; CS%slope_y(:,:,:) = 0.0
+    allocate(CS%slope_x(IsdB:IedB,jsd:jed,GV%ke+1)) ; CS%slope_x(:,:,:) = 0.0
+    allocate(CS%slope_y(isd:ied,JsdB:JedB,GV%ke+1)) ; CS%slope_y(:,:,:) = 0.0
     call get_param(param_file, mdl, "KD_SMOOTH", CS%kappa_smooth, &
                  "A diapycnal diffusivity that is used to interpolate "//&
                  "more sensible values of T & S into thin layers.", &
@@ -1134,10 +1105,10 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
     if (CS%Visbeck_L_scale<0) then
       do j=js,je ; do I=is-1,Ieq
         CS%L2u(I,j) = CS%Visbeck_L_scale**2 * G%areaCu(I,j)
-      enddo; enddo
+      enddo ; enddo
       do J=js-1,Jeq ; do i=is,ie
         CS%L2v(i,J) = CS%Visbeck_L_scale**2 * G%areaCv(i,J)
-      enddo; enddo
+      enddo ; enddo
     else
       CS%L2u(:,:) = US%m_to_L**2*CS%Visbeck_L_scale**2
       CS%L2v(:,:) = US%m_to_L**2*CS%Visbeck_L_scale**2
@@ -1342,8 +1313,8 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
 
     ALLOC_(CS%Laplac3_const_u(IsdB:IedB,jsd:jed)) ; CS%Laplac3_const_u(:,:) = 0.0
     ALLOC_(CS%Laplac3_const_v(isd:ied,JsdB:JedB)) ; CS%Laplac3_const_v(:,:) = 0.0
-    ALLOC_(CS%KH_u_QG(IsdB:IedB,jsd:jed,G%ke)) ; CS%KH_u_QG(:,:,:) = 0.0
-    ALLOC_(CS%KH_v_QG(isd:ied,JsdB:JedB,G%ke)) ; CS%KH_v_QG(:,:,:) = 0.0
+    ALLOC_(CS%KH_u_QG(IsdB:IedB,jsd:jed,GV%ke)) ; CS%KH_u_QG(:,:,:) = 0.0
+    ALLOC_(CS%KH_v_QG(isd:ied,JsdB:JedB,GV%ke)) ; CS%KH_v_QG(:,:,:) = 0.0
     ! register diagnostics
 
     CS%id_KH_u_QG = register_diag_field('ocean_model', 'KH_u_QG', diag%axesCuL, Time, &
@@ -1354,13 +1325,12 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
     do j=Jsq,Jeq+1 ; do I=is-1,Ieq
       ! Static factors in the Leith schemes
       grid_sp_u2 = G%dyCu(I,j)*G%dxCu(I,j)
-      grid_sp_u3 = sqrt(grid_sp_u2)
+      grid_sp_u3 = grid_sp_u2*sqrt(grid_sp_u2)
       CS%Laplac3_const_u(I,j) = Leith_Lap_const * grid_sp_u3
     enddo ; enddo
     do j=js-1,Jeq ; do I=Isq,Ieq+1
       ! Static factors in the Leith schemes
-      !### The second factor here is wrong.  It should be G%dxCv(i,J).
-      grid_sp_v2 = G%dyCv(i,J)*G%dxCu(i,J)
+      grid_sp_v2 = G%dyCv(i,J)*G%dxCv(i,J)
       grid_sp_v3 = grid_sp_v2*sqrt(grid_sp_v2)
       CS%Laplac3_const_v(i,J) = Leith_Lap_const * grid_sp_v3
     enddo ; enddo
