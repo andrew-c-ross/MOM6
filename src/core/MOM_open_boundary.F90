@@ -754,7 +754,7 @@ subroutine initialize_segment_data(G, OBC, PF)
     obgc_segments_props_list => obgc_segments_props !Get a pointer to the saved type
     do m=1,segment%num_fields
       if(m .le. num_fields) then  
-       call parse_segment_data_str(trim(segstr), var=trim(fields(m)), value=value, filenam=filename, fieldnam=fieldname)
+       call parse_segment_data_str(trim(segstr), var=trim(fields(m)), value=value, filename=filename, fieldname=fieldname)
       else
        segment%field(m)%genre='obgc'
        call get_obgc_segments_props(obgc_segments_props_list,fields(m),filename,fieldname)
@@ -4760,7 +4760,6 @@ subroutine register_temp_salt_segments(GV, OBC, tr_Reg, param_file)
 
 end subroutine register_temp_salt_segments
 
-<<<<<<< HEAD
 !> Sets the OBC properties of external obgc tracers, such as their source file and field name
 subroutine set_obgc_segments_props(tr_name,obc_src_file_name,obc_src_field_name)
   character(len=*),           intent(in)    :: tr_name            !< Tracer name
@@ -4816,8 +4815,9 @@ subroutine register_obgc_segments(GV, OBC, tr_Reg, param_file, tr_name)
 
 end subroutine register_obgc_segments
 
-subroutine fill_obgc_segments(G, OBC, tr_ptr, tr_name)
+subroutine fill_obgc_segments(G, GV, OBC, tr_ptr, tr_name)
   type(ocean_grid_type),      intent(inout) :: G      !< Ocean grid structure
+  type(verticalGrid_type),    intent(in)    :: GV  !< The ocean's vertical grid structure
   type(ocean_OBC_type),       pointer       :: OBC    !< Open boundary structure
   real, dimension(:,:,:),     pointer       :: tr_ptr !< Pointer to tracer field
   character(len=*),           intent(in)    :: tr_name!< Tracer name
@@ -4862,7 +4862,7 @@ subroutine fill_obgc_segments(G, OBC, tr_ptr, tr_name)
     endif
     segment%tr_Reg%Tr(nt)%tres(:,:,:) = segment%tr_Reg%Tr(nt)%t(:,:,:)
   enddo
-  call setup_OBC_tracer_reservoirs(G, OBC) !This will redo the T&S
+  call setup_OBC_tracer_reservoirs(G, GV, OBC) !This will redo the T&S
 end subroutine fill_obgc_segments
 
 subroutine fill_temp_salt_segments(G, GV, OBC, tv)
