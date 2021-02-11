@@ -664,8 +664,6 @@ subroutine initialize_segment_data(G, OBC, PF)
   type(ocean_grid_type), intent(in)    :: G   !< Ocean grid structure
   type(ocean_OBC_type),  intent(inout) :: OBC !< Open boundary control structure
   type(param_file_type), intent(in)    :: PF  !< Parameter file handle
-  integer :: n,m,num_fields,mm
-  character(len=256) :: segstr, filename
   integer :: n, m, num_fields, mm
   character(len=1024) :: segstr
   character(len=256) :: filename
