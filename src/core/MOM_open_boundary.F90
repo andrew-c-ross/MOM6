@@ -752,7 +752,7 @@ subroutine initialize_segment_data(G, OBC, PF)
     obgc_segments_props_list => obgc_segments_props !Get a pointer to the saved type
     do m=1,segment%num_fields
       if(m .le. num_fields) then  
-       call parse_segment_data_str(trim(segstr), var=trim(fields(m)), value=value, filename=filename, fieldname=fieldname)
+       call parse_segment_data_str(trim(segstr), m, var=trim(fields(m)), value=value, filename=filename, fieldname=fieldname)
       else
        segment%field(m)%genre='obgc'
        call get_obgc_segments_props(obgc_segments_props_list,fields(m),filename,fieldname)
@@ -1614,7 +1614,7 @@ end subroutine parse_segment_manifest_str
 
 
 !> Parse an OBC_SEGMENT_%%%_DATA string
-subroutine parse_segment_data_str(segment_str, idx, var, value, filename, fieldname)
+subroutine parse_segment_data_str(segment_str, idx, var, value, filename, fieldname, fields, num_fields, debug, has_var)
   character(len=*), intent(in) :: segment_str   !< A string in form of
       !! "VAR1=file:foo1.nc(varnam1),VAR2=file:foo2.nc(varnam2),..."
   integer, intent(in) :: idx                    !< Index of segment_str record
