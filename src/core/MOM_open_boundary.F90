@@ -1618,9 +1618,9 @@ subroutine parse_segment_data_str(segment_str, idx, var, value, filename, fieldn
   character(len=*), intent(in) :: segment_str   !< A string in form of
       !! "VAR1=file:foo1.nc(varnam1),VAR2=file:foo2.nc(varnam2),..."
   integer, intent(in) :: idx                    !< Index of segment_str record
-  character(len=*), intent(in) :: var           !< The name of the variable for which parameters are needed
-  character(len=*), intent(out) :: filename     !< The name of the input file if using "file" method
-  character(len=*), intent(out) :: fieldname    !< The name of the variable in the input file if using
+  character(len=*), optional, intent(in) :: var           !< The name of the variable for which parameters are needed
+  character(len=*), optional, intent(out) :: filename     !< The name of the input file if using "file" method
+  character(len=*), optional, intent(out) :: fieldname    !< The name of the variable in the input file if using
                                                 !! "file" method
   real, optional, intent(out)  :: value         !< A constant value if using the "value" method
   character(len=*), dimension(MAX_OBC_FIELDS), &
