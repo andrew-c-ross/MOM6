@@ -94,7 +94,7 @@ use MOM_obsolete_diagnostics,  only : register_obsolete_diagnostics
 use MOM_open_boundary,         only : ocean_OBC_type, OBC_registry_type
 use MOM_open_boundary,         only : register_temp_salt_segments
 use MOM_open_boundary,         only : open_boundary_register_restarts
-use MOM_open_boundary,         only : update_segment_tracer_reservoirs
+use MOM_open_boundary,         only : update_segment_tracer_reservoirs, update_OBC_segment_data
 use MOM_open_boundary,         only : rotate_OBC_config, rotate_OBC_init
 use MOM_set_visc,              only : set_viscous_BBL, set_viscous_ML, set_visc_init
 use MOM_set_visc,              only : set_visc_register_restarts, set_visc_CS
