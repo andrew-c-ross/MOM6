@@ -2742,6 +2742,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   ! call fix_restart_scaling(GV)
   ! call fix_restart_unit_scaling(US)
 
+  call update_OBC_segment_data(G, GV, US, CS%OBC, CS%tv, CS%h, Time)
+
   call callTree_leave("initialize_MOM()")
   call cpu_clock_end(id_clock_init)
 
