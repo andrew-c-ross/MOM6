@@ -561,7 +561,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
      call initialize_segment_data(G, OBC, PF) !   call initialize_segment_data(G, OBC, param_file)
 !     call open_boundary_config(G, US, PF, OBC)
     ! Call this once to fill boundary arrays from fixed values
-    if (.not. OBC%needs_IO_for_data)  &
+    ! if (.not. OBC%needs_IO_for_data)  &
       call update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
 
     call get_param(PF, mdl, "OBC_USER_CONFIG", config, &
