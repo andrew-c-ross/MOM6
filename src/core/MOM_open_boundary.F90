@@ -1914,7 +1914,7 @@ end subroutine open_boundary_impose_land_mask
 subroutine setup_OBC_tracer_reservoirs(G, OBC, do_ts)
   type(ocean_grid_type),      intent(in)    :: G          !< Ocean grid structure
   type(ocean_OBC_type),       pointer       :: OBC !< Open boundary control structure
-  logical, intent(in), optional :: do_ts  !< If false, skip first two (T and S)
+  logical, optional :: do_ts  !< If false, skip first two (T and S)
   ! Local variables
   type(OBC_segment_type), pointer :: segment => NULL()
   integer :: i, j, k, m, n
