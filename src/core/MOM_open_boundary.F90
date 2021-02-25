@@ -1917,7 +1917,7 @@ subroutine setup_OBC_tracer_reservoirs(G, OBC, do_ts)
   logical, optional :: do_ts  !< If false, skip first two (T and S)
   ! Local variables
   type(OBC_segment_type), pointer :: segment => NULL()
-  integer :: i, j, k, m, n
+  integer :: i, j, k, m, m0, n
 
   if(.not. present(do_ts)) do_ts = .true.
   if(do_ts) then
