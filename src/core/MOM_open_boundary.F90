@@ -1919,11 +1919,9 @@ subroutine setup_OBC_tracer_reservoirs(G, OBC, do_ts)
   type(OBC_segment_type), pointer :: segment => NULL()
   integer :: i, j, k, m, m0, n
 
-  if(.not. present(do_ts)) do_ts = .true.
-  if(do_ts) then
-    m0 = 1
-  else
-    m0 = 3
+  m0 = 1
+  if(present(do_ts)) then
+    if(.not. do_ts) m0 = 3  
   endif  
 
   do n=1,OBC%number_of_segments
