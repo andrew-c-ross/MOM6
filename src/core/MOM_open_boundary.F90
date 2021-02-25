@@ -4545,7 +4545,7 @@ subroutine fill_obgc_segments(G, OBC, tr_ptr, tr_name)
     endif
     segment%tr_Reg%Tr(nt)%tres(:,:,:) = segment%tr_Reg%Tr(nt)%t(:,:,:)
   enddo
-  call setup_OBC_tracer_reservoirs(G, OBC, False) ! Skip T&S
+  call setup_OBC_tracer_reservoirs(G, OBC, .false.) ! Skip T&S
 end subroutine fill_obgc_segments
 
 subroutine fill_temp_salt_segments(G, OBC, tv)
