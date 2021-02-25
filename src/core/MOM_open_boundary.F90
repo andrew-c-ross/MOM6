@@ -1911,19 +1911,27 @@ subroutine open_boundary_impose_land_mask(OBC, G, areaCu, areaCv, US)
 end subroutine open_boundary_impose_land_mask
 
 !> Make sure the OBC tracer reservoirs are initialized.
-subroutine setup_OBC_tracer_reservoirs(G, OBC)
+subroutine setup_OBC_tracer_reservoirs(G, OBC, do_ts)
   type(ocean_grid_type),      intent(in)    :: G          !< Ocean grid structure
   type(ocean_OBC_type),       pointer       :: OBC !< Open boundary control structure
+  logical, intent(in), optional :: do_ts  !< If false, skip first two (T and S)
   ! Local variables
   type(OBC_segment_type), pointer :: segment => NULL()
   integer :: i, j, k, m, n
+
+  if(.not. present(do_ts)) do_ts = .true.
+  if(do_ts) then
+    m0 = 1
+  else
+    m0 = 3
+  endif  
 
   do n=1,OBC%number_of_segments
     segment=>OBC%segment(n)
     if (associated(segment%tr_Reg)) then
       if (segment%is_E_or_W) then
         I = segment%HI%IsdB
-        do m=1,OBC%ntr
+        do m=m0,OBC%ntr
           if (associated(segment%tr_Reg%Tr(m)%tres)) then
             do k=1,G%ke
               do j=segment%HI%jsd,segment%HI%jed
@@ -1934,7 +1942,7 @@ subroutine setup_OBC_tracer_reservoirs(G, OBC)
         enddo
       else
         J = segment%HI%JsdB
-        do m=1,OBC%ntr
+        do m=m0,OBC%ntr
           if (associated(segment%tr_Reg%Tr(m)%tres)) then
             do k=1,G%ke
               do i=segment%HI%isd,segment%HI%ied
@@ -4537,7 +4545,7 @@ subroutine fill_obgc_segments(G, OBC, tr_ptr, tr_name)
     endif
     segment%tr_Reg%Tr(nt)%tres(:,:,:) = segment%tr_Reg%Tr(nt)%t(:,:,:)
   enddo
-  call setup_OBC_tracer_reservoirs(G, OBC) !This will redo the T&S
+  call setup_OBC_tracer_reservoirs(G, OBC, False) ! Skip T&S
 end subroutine fill_obgc_segments
 
 subroutine fill_temp_salt_segments(G, OBC, tv)
