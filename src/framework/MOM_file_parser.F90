@@ -16,7 +16,7 @@ use MOM_string_functions, only : left_real, left_reals
 implicit none ; private
 
 integer, parameter, public :: MAX_PARAM_FILES = 5 !< Maximum number of parameter files.
-integer, parameter :: INPUT_STR_LENGTH = 320 !< Maximum line length in parameter file.
+integer, parameter :: INPUT_STR_LENGTH = 1024 !< Maximum line length in parameter file.
 integer, parameter :: FILENAME_LENGTH = 200  !< Maximum number of characters in file names.
 
 ! The all_PEs_read option should be eliminated with post-riga shared code.
