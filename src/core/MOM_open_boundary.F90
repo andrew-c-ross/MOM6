@@ -5212,11 +5212,8 @@ subroutine update_segment_tracer_reservoirs(G, GV, uhr, vhr, h, OBC, dt, Reg)
   call pass_vector(uhr1,vhr1, G%Domain)
 
   if (OBC%OBC_pe) then ; do n=1,OBC%number_of_segments
-   segment=>OBC%segment(n)
-   if (.not. associated(segment%tr_Reg)) cycle
-   do m=1,ntr
-    if (.not. allocated(segment%tr_Reg%Tr(m)%tres)) cycle
-
+    segment=>OBC%segment(n)
+    if (.not. associated(segment%tr_Reg)) cycle   
     if (segment%is_E_or_W) then
       I = segment%HI%IsdB
       do j=segment%HI%jsd,segment%HI%jed
@@ -5231,6 +5228,7 @@ subroutine update_segment_tracer_reservoirs(G, GV, uhr, vhr, h, OBC, dt, Reg)
         if (G%mask2dT(I+ishift,j) == 0.0) cycle
         ! Update the reservoir tracer concentration implicitly using a Backward-Euler timestep
         do m=1,ntr
+          if (.not. allocated(segment%tr_Reg%Tr(m)%tres)) cycle
           I_scale = 1.0 ; if (segment%tr_Reg%Tr(m)%scale /= 0.0) I_scale = 1.0 / segment%tr_Reg%Tr(m)%scale
           if (allocated(segment%tr_Reg%Tr(m)%tres)) then ; do k=1,nz
             u_L_out = max(0.0, (idir*uhr1(I,j,k))*segment%Tr_InvLscale_out*segment%field(m)%resrv_lfac_out / &
@@ -5259,6 +5257,7 @@ subroutine update_segment_tracer_reservoirs(G, GV, uhr, vhr, h, OBC, dt, Reg)
         if (G%mask2dT(i,j+jshift) == 0.0) cycle
         ! Update the reservoir tracer concentration implicitly using a Backward-Euler timestep
         do m=1,ntr
+          if (.not. allocated(segment%tr_Reg%Tr(m)%tres)) cycle
           I_scale = 1.0 ; if (segment%tr_Reg%Tr(m)%scale /= 0.0) I_scale = 1.0 / segment%tr_Reg%Tr(m)%scale
           if (allocated(segment%tr_Reg%Tr(m)%tres)) then ; do k=1,nz
             v_L_out = max(0.0, (jdir*vhr1(i,J,k))*segment%Tr_InvLscale_out*segment%field(m)%resrv_lfac_out / &
@@ -5274,7 +5273,6 @@ subroutine update_segment_tracer_reservoirs(G, GV, uhr, vhr, h, OBC, dt, Reg)
         enddo
       enddo
     endif
-   enddo !m=1,ntr
   enddo ; endif
 
 end subroutine update_segment_tracer_reservoirs
