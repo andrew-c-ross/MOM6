@@ -119,7 +119,7 @@ end subroutine Kelvin_OBC_end
 subroutine Kelvin_initialize_topography(D, G, param_file, max_depth, US)
   type(dyn_horgrid_type),          intent(in)  :: G !< The dynamic horizontal grid type
   real, dimension(G%isd:G%ied,G%jsd:G%jed), &
-                                   intent(out) :: D !< Ocean bottom depth [m ~> Z]
+                                   intent(out) :: D !< Ocean bottom depth [Z ~> m]
   type(param_file_type),           intent(in)  :: param_file !< Parameter file structure
   real,                            intent(in)  :: max_depth !< Maximum model depth [Z ~> m]
   type(unit_scale_type),           intent(in)  :: US !< A dimensional unit scaling type
@@ -127,7 +127,6 @@ subroutine Kelvin_initialize_topography(D, G, param_file, max_depth, US)
   ! Local variables
   character(len=40)  :: mdl = "Kelvin_initialize_topography" ! This subroutine's name.
   real :: min_depth ! The minimum and maximum depths [Z ~> m].
-  real :: PI ! 3.1415...
   real :: coast_offset1, coast_offset2, coast_angle, right_angle
   integer :: i, j
 

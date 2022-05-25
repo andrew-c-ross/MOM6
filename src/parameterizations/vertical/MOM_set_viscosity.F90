@@ -139,13 +139,13 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   real, dimension(SZIB_(G)) :: &
     ustar, &    !   The bottom friction velocity [Z T-1 ~> m s-1].
     T_EOS, &    !   The temperature used to calculate the partial derivatives
-                ! of density with T and S [degC].
+                ! of density with T and S [C ~> degC].
     S_EOS, &    !   The salinity used to calculate the partial derivatives
-                ! of density with T and S [ppt].
+                ! of density with T and S [S ~> ppt].
     dR_dT, &    !   Partial derivative of the density in the bottom boundary
-                ! layer with temperature [R degC-1 ~> kg m-3 degC-1].
+                ! layer with temperature [R C-1 ~> kg m-3 degC-1].
     dR_dS, &    !   Partial derivative of the density in the bottom boundary
-                ! layer with salinity [R ppt-1 ~> kg m-3 ppt-1].
+                ! layer with salinity [R S-1 ~> kg m-3 ppt-1].
     press       !   The pressure at which dR_dT and dR_dS are evaluated [R L2 T-2 ~> Pa].
   real :: htot      ! Sum of the layer thicknesses up to some point [H ~> m or kg m-2].
   real :: htot_vel  ! Sum of the layer thicknesses up to some point [H ~> m or kg m-2].
@@ -167,9 +167,9 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
     h_vel, &    ! Arithmetic mean of the layer thicknesses adjacent to a
                 ! velocity point [H ~> m or kg m-2].
     T_vel, &    ! Arithmetic mean of the layer temperatures adjacent to a
-                ! velocity point [degC].
+                ! velocity point [C ~> degC].
     S_vel, &    ! Arithmetic mean of the layer salinities adjacent to a
-                ! velocity point [ppt].
+                ! velocity point [S ~> ppt].
     Rml_vel     ! Arithmetic mean of the layer coordinate densities adjacent
                 ! to a velocity point [R ~> kg m-3].
 
@@ -201,8 +201,8 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
                            ! the near-bottom velocity magnitude [H ~> m or kg m-2].
   real :: hutot            ! Running sum of thicknesses times the
                            ! velocity magnitudes [H L T-1 ~> m2 s-1 or kg m-1 s-1].
-  real :: Thtot            ! Running sum of thickness times temperature [degC H ~> degC m or degC kg m-2].
-  real :: Shtot            ! Running sum of thickness times salinity [ppt H ~> ppt m or ppt kg m-2].
+  real :: Thtot            ! Running sum of thickness times temperature [C H ~> degC m or degC kg m-2].
+  real :: Shtot            ! Running sum of thickness times salinity [S H ~> ppt m or ppt kg m-2].
   real :: hweight          ! The thickness of a layer that is within Hbbl
                            ! of the bottom [H ~> m or kg m-2].
   real :: v_at_u, u_at_v   ! v at a u point or vice versa [L T-1 ~> m s-1].
@@ -294,8 +294,8 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   if (CS%debug) then
     call uvchksum("Start set_viscous_BBL [uv]", u, v, G%HI, haloshift=1, scale=US%L_T_to_m_s)
     call hchksum(h,"Start set_viscous_BBL h", G%HI, haloshift=1, scale=GV%H_to_m)
-    if (associated(tv%T)) call hchksum(tv%T, "Start set_viscous_BBL T", G%HI, haloshift=1)
-    if (associated(tv%S)) call hchksum(tv%S, "Start set_viscous_BBL S", G%HI, haloshift=1)
+    if (associated(tv%T)) call hchksum(tv%T, "Start set_viscous_BBL T", G%HI, haloshift=1, scale=US%C_to_degC)
+    if (associated(tv%S)) call hchksum(tv%S, "Start set_viscous_BBL S", G%HI, haloshift=1, scale=US%S_to_ppt)
   endif
 
   use_BBL_EOS = associated(tv%eqn_of_state) .and. CS%BBL_use_EOS
@@ -385,15 +385,13 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
       if (j<G%Jsc) cycle
       is = Isq ; ie = Ieq
       do i=is,ie
-        do_i(i) = .false.
-        if (G%mask2dCu(I,j) > 0) do_i(i) = .true.
+        do_i(i) = (G%mask2dCu(I,j) > 0.0)
       enddo
     else
       ! m=2 refers to v-points
       is = G%isc ; ie = G%iec
       do i=is,ie
-        do_i(i) = .false.
-        if (G%mask2dCv(i,J) > 0) do_i(i) = .true.
+        do_i(i) = (G%mask2dCv(i,J) > 0.0)
       enddo
     endif
 
@@ -911,7 +909,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
           else ; L(K) = L(K)*pbv%por_layer_widthV(i,J,K); endif
 
           ! Determine the drag contributing to the bottom boundary layer
-          ! and the Raleigh drag that acts on each layer.
+          ! and the Rayleigh drag that acts on each layer.
           if (L(K) > L(K+1)) then
             if (vol_below < bbl_thick) then
               BBL_frac = (1.0-vol_below/bbl_thick)**2
@@ -1159,9 +1157,9 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
     htot, &     !   The total depth of the layers being that are within the
                 ! surface mixed layer [H ~> m or kg m-2].
     Thtot, &    !   The integrated temperature of layers that are within the
-                ! surface mixed layer [H degC ~> m degC or kg degC m-2].
+                ! surface mixed layer [H C ~> m degC or kg degC m-2].
     Shtot, &    !   The integrated salt of layers that are within the
-                ! surface mixed layer [H ppt ~> m ppt or kg ppt m-2].
+                ! surface mixed layer [H S ~> m ppt or kg ppt m-2].
     Rhtot, &    !   The integrated density of layers that are within the surface mixed layer
                 ! [H R ~> kg m-2 or kg2 m-5].  Rhtot is only used if no
                 ! equation of state is used.
@@ -1169,13 +1167,13 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
     vhtot, &    ! the surface mixed layer [H L T-1 ~> m2 s-1 or kg m-1 s-1].
     Idecay_len_TKE, & ! The inverse of a turbulence decay length scale [H-1 ~> m-1 or m2 kg-1].
     dR_dT, &    !   Partial derivative of the density at the base of layer nkml
-                ! (roughly the base of the mixed layer) with temperature [R degC-1 ~> kg m-3 degC-1].
+                ! (roughly the base of the mixed layer) with temperature [R C-1 ~> kg m-3 degC-1].
     dR_dS, &    !   Partial derivative of the density at the base of layer nkml
-                ! (roughly the base of the mixed layer) with salinity [R ppt-1 ~> kg m-3 ppt-1].
+                ! (roughly the base of the mixed layer) with salinity [R S-1 ~> kg m-3 ppt-1].
     ustar, &    !   The surface friction velocity under ice shelves [Z T-1 ~> m s-1].
     press, &    ! The pressure at which dR_dT and dR_dS are evaluated [R L2 T-2 ~> Pa].
-    T_EOS, &    ! The potential temperature at which dR_dT and dR_dS are evaluated [degC]
-    S_EOS       ! The salinity at which dR_dT and dR_dS are evaluated [ppt].
+    T_EOS, &    ! The potential temperature at which dR_dT and dR_dS are evaluated [C ~> degC]
+    S_EOS       ! The salinity at which dR_dT and dR_dS are evaluated [S ~> ppt].
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     mask_u      ! A mask that disables any contributions from u points that
                 ! are land or past open boundary conditions [nondim], 0 or 1.
@@ -1191,7 +1189,7 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
   real :: Uh2   ! The squared magnitude of the difference between the velocity
                 ! integrated through the mixed layer and the velocity of the
                 ! interior layer layer times the depth of the the mixed layer
-                ! [H2 Z2 T-2 ~> m4 s-2 or kg2 m-2 s-2].
+                ! [H2 L2 T-2 ~> m4 s-2 or kg2 m-2 s-2].
   real :: htot_vel  ! Sum of the layer thicknesses up to some point [H ~> m or kg m-2].
   real :: hwtot     ! Sum of the thicknesses used to calculate
                     ! the near-bottom velocity magnitude [H ~> m or kg m-2].
@@ -1203,8 +1201,8 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
 
   real :: hlay      ! The layer thickness at velocity points [H ~> m or kg m-2].
   real :: I_2hlay   ! 1 / 2*hlay [H-1 ~> m-1 or m2 kg-1].
-  real :: T_lay     ! The layer temperature at velocity points [degC].
-  real :: S_lay     ! The layer salinity at velocity points [ppt].
+  real :: T_lay     ! The layer temperature at velocity points [C ~> degC].
+  real :: S_lay     ! The layer salinity at velocity points [S ~> ppt].
   real :: Rlay      ! The layer potential density at velocity points [R ~> kg m-3].
   real :: Rlb       ! The potential density of the layer below [R ~> kg m-3].
   real :: v_at_u    ! The meridonal velocity at a zonal velocity point [L T-1 ~> m s-1].
@@ -1807,9 +1805,10 @@ subroutine set_viscous_ML(u, v, h, tv, forces, visc, dt, G, GV, US, CS)
 end subroutine set_viscous_ML
 
 !> Register any fields associated with the vertvisc_type.
-subroutine set_visc_register_restarts(HI, GV, param_file, visc, restart_CS)
+subroutine set_visc_register_restarts(HI, GV, US, param_file, visc, restart_CS)
   type(hor_index_type),    intent(in)    :: HI         !< A horizontal index type structure.
   type(verticalGrid_type), intent(in)    :: GV         !< The ocean's vertical grid structure.
+  type(unit_scale_type),   intent(in)    :: US         !< A dimensional unit scaling type
   type(param_file_type),   intent(in)    :: param_file !< A structure to parse for run-time
                                                        !! parameters.
   type(vertvisc_type),     intent(inout) :: visc       !< A structure containing vertical
@@ -1849,20 +1848,22 @@ subroutine set_visc_register_restarts(HI, GV, param_file, visc, restart_CS)
   if (use_kappa_shear .or. useKPP .or. useEPBL .or. use_CVMix_shear .or. use_CVMix_conv) then
     call safe_alloc_ptr(visc%Kd_shear, isd, ied, jsd, jed, nz+1)
     call register_restart_field(visc%Kd_shear, "Kd_shear", .false., restart_CS, &
-                  "Shear-driven turbulent diffusivity at interfaces", "m2 s-1", z_grid='i')
+                  "Shear-driven turbulent diffusivity at interfaces", &
+                  units="m2 s-1", conversion=US%Z2_T_to_m2_s, z_grid='i')
   endif
   if (useKPP .or. useEPBL .or. use_CVMix_shear .or. use_CVMix_conv .or. &
       (use_kappa_shear .and. .not.KS_at_vertex )) then
     call safe_alloc_ptr(visc%Kv_shear, isd, ied, jsd, jed, nz+1)
     call register_restart_field(visc%Kv_shear, "Kv_shear", .false., restart_CS, &
-                  "Shear-driven turbulent viscosity at interfaces", "m2 s-1", z_grid='i')
+                  "Shear-driven turbulent viscosity at interfaces", &
+                  units="m2 s-1", conversion=US%Z2_T_to_m2_s, z_grid='i')
   endif
   if (use_kappa_shear .and. KS_at_vertex) then
     call safe_alloc_ptr(visc%TKE_turb, HI%IsdB, HI%IedB, HI%JsdB, HI%JedB, nz+1)
     call safe_alloc_ptr(visc%Kv_shear_Bu, HI%IsdB, HI%IedB, HI%JsdB, HI%JedB, nz+1)
     call register_restart_field(visc%Kv_shear_Bu, "Kv_shear_Bu", .false., restart_CS, &
-                  "Shear-driven turbulent viscosity at vertex interfaces", "m2 s-1", &
-                  hor_grid="Bu", z_grid='i')
+                  "Shear-driven turbulent viscosity at vertex interfaces", &
+                  units="m2 s-1", conversion=US%Z2_T_to_m2_s, hor_grid="Bu", z_grid='i')
   elseif (use_kappa_shear) then
     call safe_alloc_ptr(visc%TKE_turb, isd, ied, jsd, jed, nz+1)
   endif
@@ -1882,7 +1883,7 @@ subroutine set_visc_register_restarts(HI, GV, param_file, visc, restart_CS)
   if (MLE_use_PBL_MLD) then
     call safe_alloc_ptr(visc%MLD, isd, ied, jsd, jed)
     call register_restart_field(visc%MLD, "MLD", .false., restart_CS, &
-                  "Instantaneous active mixing layer depth", "m")
+                  "Instantaneous active mixing layer depth", "m", conversion=US%Z_to_m)
   endif
 
   if (hfreeze >= 0.0 .and. .not.MLE_use_PBL_MLD) then
@@ -1924,17 +1925,16 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
                            ! to the representation in a restart file.
   real    :: Z2_T_rescale  ! A rescaling factor for vertical diffusivities and viscosities from the
                            ! representation in a restart file to the internal representation in this run.
-  integer :: i, j, k, is, ie, js, je, n
+  integer :: i, j, k, is, ie, js, je
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB, nz
   logical :: default_2018_answers
-  logical :: use_kappa_shear, adiabatic, use_omega, MLE_use_PBL_MLD
+  logical :: adiabatic, use_omega, MLE_use_PBL_MLD
   logical :: use_KPP
   logical :: use_regridding  ! If true, use the ALE algorithm rather than layered
                              ! isopycnal or stacked shallow water mode.
   logical :: use_temperature ! If true, temperature and salinity are used as state variables.
   logical :: use_EOS         ! If true, density calculated from T & S using an equation of state.
   character(len=200) :: filename, tideamp_file
-  type(OBC_segment_type), pointer :: segment => NULL() ! pointer to OBC segment type
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl = "MOM_set_visc"  ! This module's name.
@@ -2191,9 +2191,9 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
     allocate(visc%nkml_visc_u(IsdB:IedB,jsd:jed), source=0.0)
     allocate(visc%nkml_visc_v(isd:ied,JsdB:JedB), source=0.0)
     CS%id_nkml_visc_u = register_diag_field('ocean_model', 'nkml_visc_u', &
-       diag%axesCu1, Time, 'Number of layers in viscous mixed layer at u points', 'm')
+       diag%axesCu1, Time, 'Number of layers in viscous mixed layer at u points', 'nondim')
     CS%id_nkml_visc_v = register_diag_field('ocean_model', 'nkml_visc_v', &
-       diag%axesCv1, Time, 'Number of layers in viscous mixed layer at v points', 'm')
+       diag%axesCv1, Time, 'Number of layers in viscous mixed layer at v points', 'nondim')
   endif
 
   call register_restart_field_as_obsolete('Kd_turb','Kd_shear', restart_CS)
@@ -2202,11 +2202,9 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
   ! Account for possible changes in dimensional scaling for variables that have been
   ! read from a restart file.
   Z_rescale = 1.0
-  if ((US%m_to_Z_restart /= 0.0) .and. (US%m_to_Z_restart /= US%m_to_Z)) &
-    Z_rescale = US%m_to_Z / US%m_to_Z_restart
+  if (US%m_to_Z_restart /= 0.0) Z_rescale = 1.0 / US%m_to_Z_restart
   I_T_rescale = 1.0
-  if ((US%s_to_T_restart /= 0.0) .and. (US%s_to_T_restart /= US%s_to_T)) &
-    I_T_rescale = US%s_to_T_restart / US%s_to_T
+  if (US%s_to_T_restart /= 0.0) I_T_rescale = US%s_to_T_restart
   Z2_T_rescale = Z_rescale**2*I_T_rescale
 
   if (Z2_T_rescale /= 1.0) then

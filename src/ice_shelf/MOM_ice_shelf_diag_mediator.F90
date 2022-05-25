@@ -105,8 +105,7 @@ subroutine set_IS_axes_info(G, param_file, diag_cs, axes_set_name)
 !   This subroutine sets up the grid and axis information for use by the ice shelf model.
 
   ! Local variables
-  integer :: id_xq, id_yq, id_zl, id_zi, id_xh, id_yh, id_ct, id_ct0
-  integer :: k
+  integer :: id_xq, id_yq, id_xh, id_yh
   logical :: Cartesian_grid
   character(len=80) :: grid_config, units_temp, set_name
 ! This include declares and sets the variable "version".
@@ -448,7 +447,7 @@ function register_MOM_IS_diag_field(module_name, field_name, axes, init_time, &
   type(diag_type), pointer :: diag => NULL()
 
   MOM_missing_value = axes%diag_cs%missing_value
-  if(present(missing_value)) MOM_missing_value = missing_value
+  if (present(missing_value)) MOM_missing_value = missing_value
 
   diag_cs => axes%diag_cs
   primary_id = -1
@@ -531,13 +530,12 @@ integer function register_MOM_IS_static_field(module_name, field_name, axes, &
   integer,          optional, intent(in) :: tile_count   !< no clue (not used in MOM_IS?)
 
   ! Local variables
-  character(len=240) :: mesg
   real :: MOM_missing_value
   integer :: primary_id, fms_id
   type(diag_ctrl), pointer :: diag_cs !< A structure that is used to regulate diagnostic output
 
   MOM_missing_value = axes%diag_cs%missing_value
-  if(present(missing_value)) MOM_missing_value = missing_value
+  if (present(missing_value)) MOM_missing_value = missing_value
 
   diag_cs => axes%diag_cs
   primary_id = -1
@@ -564,7 +562,7 @@ subroutine describe_option(opt_name, value, diag_CS)
 
   ! Local variables
   character(len=240) :: mesg
-  integer :: start_ind = 1, end_ind, len_ind
+  integer :: len_ind
 
   len_ind = len_trim(value)
 
@@ -582,8 +580,8 @@ function i2s(a, n_in)
   character(len=15) :: i2s_temp
   integer :: i,n
 
-  n=size(a)
-  if(present(n_in)) n = n_in
+  n = size(a)
+  if (present(n_in)) n = n_in
 
   i2s = ''
   do i=1,n
