@@ -3713,7 +3713,7 @@ subroutine update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
   type(time_type),                           intent(in)    :: Time !< Model time
   ! Local variables
   integer :: c, i, j, k, is, ie, js, je, isd, ied, jsd, jed
-  integer :: IsdB, IedB, JsdB, JedB, n, m, nz
+  integer :: IsdB, IedB, JsdB, JedB, n, m, nz, nt, it
   character(len=40)  :: mdl = "update_OBC_segment_data" ! This subroutine's name.
   character(len=200) :: filename, OBC_file, inputdir ! Strings for file/path
   type(OBC_segment_type), pointer :: segment => NULL()
