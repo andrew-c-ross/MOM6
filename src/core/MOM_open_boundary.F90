@@ -4803,7 +4803,7 @@ subroutine fill_obgc_segments(G, GV, OBC, tr_ptr, tr_name)
 !  call setup_OBC_tracer_reservoirs(GV, OBC, .true.) ! Skip T and S to avoid restart bug
 end subroutine fill_obgc_segments
 
-subroutine fill_temp_salt_segments(G, GV, OBC, tv)
+subroutine fill_temp_salt_segments(G, GV, US, OBC, tv)
   type(ocean_grid_type),   intent(in)    :: G   !< Ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV  !< ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US  !< Unit scaling
