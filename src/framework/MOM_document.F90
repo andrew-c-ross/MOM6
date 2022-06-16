@@ -389,7 +389,6 @@ subroutine doc_openBlock(doc, blockName, desc)
   character(len=*), optional, intent(in) :: desc !< A description of the parameter block being opened
 ! This subroutine handles documentation for opening a parameter block.
   character(len=mLen) :: mesg
-  character(len=doc%commentColumn) :: valstring
 
   if (.not. (is_root_pe() .and. associated(doc))) return
   call open_doc_file(doc)
@@ -413,7 +412,6 @@ subroutine doc_closeBlock(doc, blockName)
   character(len=*), intent(in) :: blockName !< The name of the parameter block being closed
 ! This subroutine handles documentation for closing a parameter block.
   character(len=mLen) :: mesg
-  character(len=doc%commentColumn) :: valstring
   integer :: i
 
   if (.not. (is_root_pe() .and. associated(doc))) return
@@ -672,22 +670,22 @@ function real_array_string(vals, sep)
   integer :: j, n, ns
   logical :: doWrite
   character(len=10) :: separator
-  n=1 ; doWrite=.true. ; real_array_string=''
+  n = 1 ; doWrite = .true. ; real_array_string = ''
   if (present(sep)) then
-    separator=sep ; ns=len(sep)
+    separator = sep ; ns = len(sep)
   else
-    separator=', ' ; ns=2
+    separator = ', ' ; ns = 2
   endif
   do j=1,size(vals)
-    doWrite=.true.
-    if (j<size(vals)) then
-      if (vals(j)==vals(j+1)) then
-        n=n+1
-        doWrite=.false.
+    doWrite = .true.
+    if (j < size(vals)) then
+      if (vals(j) == vals(j+1)) then
+        n = n+1
+        doWrite = .false.
       endif
     endif
     if (doWrite) then
-      if(len(real_array_string)>0) then ! Write separator if a number has already been written
+      if (len(real_array_string) > 0) then ! Write separator if a number has already been written
         real_array_string = real_array_string // separator(1:ns)
       endif
       if (n>1) then

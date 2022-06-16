@@ -189,16 +189,11 @@ subroutine diag_remap_configure_axes(remap_cs, GV, US, param_file)
   type(verticalGrid_type), intent(in)    :: GV !< ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US !< A dimensional unit scaling type
   type(param_file_type),   intent(in)    :: param_file !< Parameter file structure
+
   ! Local variables
-  integer :: nzi(4), nzl(4), k
-  character(len=200) :: inputdir, string, filename, int_varname, layer_varname
   character(len=40)  :: mod  = "MOM_diag_remap" ! This module's name.
-  character(len=8)   :: units, expected_units
-  character(len=34)  :: longname, string2
-
-  character(len=256) :: err_msg
-  logical :: ierr
-
+  character(len=8)   :: units
+  character(len=34)  :: longname
   real, allocatable, dimension(:) :: interfaces, layers
 
   call initialize_regridding(remap_cs%regrid_cs, GV, US, GV%max_depth, param_file, mod, &
@@ -222,7 +217,7 @@ subroutine diag_remap_configure_axes(remap_cs, GV, US, param_file)
   allocate(interfaces(remap_cs%nz+1))
   allocate(layers(remap_cs%nz))
 
-  interfaces(:) = getCoordinateInterfaces(remap_cs%regrid_cs)
+  interfaces(:) = getCoordinateInterfaces(remap_cs%regrid_cs, undo_scaling=.true.)
   layers(:) = 0.5 * ( interfaces(1:remap_cs%nz) + interfaces(2:remap_cs%nz+1) )
 
   remap_cs%interface_axes_id = MOM_diag_axis_init(lowercase(trim(remap_cs%diag_coord_name))//'_i', &
@@ -278,8 +273,8 @@ subroutine diag_remap_update(remap_cs, G, GV, US, h, T, S, eqn_of_state, h_targe
   type(verticalGrid_type), intent(in) :: GV !< ocean vertical grid structure
   type(unit_scale_type),   intent(in) :: US !< A dimensional unit scaling type
   real, dimension(:,:,:),  intent(in) :: h  !< New thickness [H ~> m or kg m-2]
-  real, dimension(:,:,:),  intent(in) :: T  !< New temperatures [degC]
-  real, dimension(:,:,:),  intent(in) :: S  !< New salinities [ppt]
+  real, dimension(:,:,:),  intent(in) :: T  !< New temperatures [C ~> degC]
+  real, dimension(:,:,:),  intent(in) :: S  !< New salinities [S ~> ppt]
   type(EOS_type),          intent(in) :: eqn_of_state !< A pointer to the equation of state
   real, dimension(:,:,:),  intent(inout) :: h_target  !< The new diagnostic thicknesses [H ~> m or kg m-2]
 
@@ -363,7 +358,7 @@ subroutine diag_remap_do_remap(remap_cs, G, GV, h, staggered_in_x, staggered_in_
   real, dimension(size(h,3)) :: h_src    ! A column of source thicknesses [H ~> m or kg m-2]
   real :: h_neglect, h_neglect_edge ! Negligible thicknesses [H ~> m or kg m-2]
   integer :: nz_src, nz_dest
-  integer :: i, j, k                !< Grid index
+  integer :: i, j                   !< Grid index
   integer :: i1, j1                 !< 1-based index
   integer :: i_lo, i_hi, j_lo, j_hi !< (uv->h) interpolation indices
   integer :: shift                  !< Symmetric offset for 1-based indexing
@@ -502,7 +497,7 @@ subroutine vertically_reintegrate_diag_field(remap_cs, G, h, h_target, staggered
   real, dimension(remap_cs%nz) :: h_dest ! Destination thicknesses [H ~> m or kg m-2]
   real, dimension(size(h,3)) :: h_src    ! A column of source thicknesses [H ~> m or kg m-2]
   integer :: nz_src, nz_dest
-  integer :: i, j, k                !< Grid index
+  integer :: i, j                   !< Grid index
   integer :: i1, j1                 !< 1-based index
   integer :: i_lo, i_hi, j_lo, j_hi !< (uv->h) interpolation indices
   integer :: shift                  !< Symmetric offset for 1-based indexing
@@ -582,7 +577,7 @@ subroutine vertically_interpolate_diag_field(remap_cs, G, h, staggered_in_x, sta
   real, dimension(remap_cs%nz) :: h_dest ! Destination thicknesses [H ~> m or kg m-2]
   real, dimension(size(h,3)) :: h_src    ! A column of source thicknesses [H ~> m or kg m-2]
   integer :: nz_src, nz_dest
-  integer :: i, j, k                !< Grid index
+  integer :: i, j                   !< Grid index
   integer :: i1, j1                 !< 1-based index
   integer :: i_lo, i_hi, j_lo, j_hi !< (uv->h) interpolation indices
   integer :: shift                  !< Symmetric offset for 1-based indexing

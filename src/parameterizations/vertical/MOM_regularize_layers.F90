@@ -13,7 +13,7 @@ use MOM_grid, only : ocean_grid_type
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
-use MOM_EOS, only : calculate_density, calculate_density_derivs, EOS_domain
+use MOM_EOS, only : calculate_density, EOS_domain
 
 implicit none ; private
 
@@ -87,11 +87,6 @@ subroutine regularize_layers(h, tv, dt, ea, eb, G, GV, US, CS)
   type(unit_scale_type),      intent(in)    :: US !< A dimensional unit scaling type
   type(regularize_layers_CS), intent(in)    :: CS !< Regularize layer control struct
 
-  ! Local variables
-  integer :: i, j, k, is, ie, js, je, nz
-
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
-
   if (.not. CS%initialized) call MOM_error(FATAL, "MOM_regularize_layers: "//&
          "Module must be initialized before it is used.")
 
@@ -138,12 +133,12 @@ subroutine regularize_surface(h, tv, dt, ea, eb, G, GV, US, CS)
     e_filt, e_2d  ! The interface depths [H ~> m or kg m-2], positive upward.
   real, dimension(SZI_(G),SZK_(GV)) :: &
     h_2d, &     !   A 2-d version of h [H ~> m or kg m-2].
-    T_2d, &     !   A 2-d version of tv%T [degC].
-    S_2d, &     !   A 2-d version of tv%S [ppt].
+    T_2d, &     !   A 2-d version of tv%T [C ~> degC].
+    S_2d, &     !   A 2-d version of tv%S [S ~> ppt].
     Rcv, &      !   A 2-d version of the coordinate density [R ~> kg m-3].
     h_2d_init, &  ! The initial value of h_2d [H ~> m or kg m-2].
-    T_2d_init, &  ! THe initial value of T_2d [degC].
-    S_2d_init, &  ! The initial value of S_2d [ppt].
+    T_2d_init, &  ! THe initial value of T_2d [C ~> degC].
+    S_2d_init, &  ! The initial value of S_2d [S ~> ppt].
     d_eb, &     !   The downward increase across a layer in the entrainment from
                 ! below [H ~> m or kg m-2].  The sign convention is that positive values of
                 ! d_eb correspond to a gain in mass by a layer by upward motion.
@@ -163,14 +158,15 @@ subroutine regularize_surface(h, tv, dt, ea, eb, G, GV, US, CS)
     h_prev_1d     ! The previous thicknesses [H ~> m or kg m-2].
   real :: I_dtol  ! The inverse of the tolerance changes [nondim].
   real :: I_dtol34 ! The inverse of the tolerance changes [nondim].
-  real :: h1, h2  ! Temporary thicknesses [H ~> m or kg m-2].
   real :: e_e, e_w, e_n, e_s  ! Temporary interface heights [H ~> m or kg m-2].
   real :: wt    ! The weight of the filted interfaces in setting the targets [nondim].
   real :: scale ! A scaling factor [nondim].
   real :: h_neglect ! A thickness that is so small it is usually lost
                     ! in roundoff and can be neglected [H ~> m or kg m-2].
   real, dimension(SZK_(GV)+1) :: &
-    int_flux, int_Tflux, int_Sflux, int_Rflux
+    int_flux, &     ! Mass flux across the interfaces [H ~> m or kg m-2]
+    int_Tflux, &    ! Temperature flux across the interfaces [C H ~> degC m or degC kg m-2]
+    int_Sflux       ! Salinity flux across the interfaces [S H ~> ppt m or ppt kg m-2]
   real :: h_add
   real :: h_det_tot
   real :: max_def_rat
@@ -184,7 +180,7 @@ subroutine regularize_surface(h, tv, dt, ea, eb, G, GV, US, CS)
 
   logical :: cols_left, ent_any, more_ent_i(SZI_(G)), ent_i(SZI_(G))
   logical :: det_any, det_i(SZI_(G))
-  logical :: do_j(SZJ_(G)), do_i(SZI_(G)), find_i(SZI_(G))
+  logical :: do_j(SZJ_(G)), do_i(SZI_(G))
   logical :: debug = .false.
   logical :: fatal_error
   character(len=256) :: mesg    ! Message for error messages.
@@ -233,8 +229,6 @@ subroutine regularize_surface(h, tv, dt, ea, eb, G, GV, US, CS)
   !$OMP                                     e,I_dtol,h,tv,debug,h_neglect,p_ref_cv,ea, &
   !$OMP                                     eb,nkml,EOSdom)
   do j=js,je ; if (do_j(j)) then
-
-!  call calculate_density_derivs(T(:,1), S(:,1), p_ref_cv, dRcv_dT, dRcv_dS, tv%eqn_of_state, EOSdom)
 
     do k=1,nz ; do i=is,ie ; d_ea(i,k) = 0.0 ; d_eb(i,k) = 0.0 ; enddo ; enddo
     kmax_d_ea = 0
@@ -474,7 +468,7 @@ subroutine regularize_surface(h, tv, dt, ea, eb, G, GV, US, CS)
       k1 = 1 ; k2 = 1
       int_top = 0.0
       do k=1,nkmb+1
-        int_flux(k) = 0.0 ; int_Rflux(k) = 0.0
+        int_flux(k) = 0.0
         int_Tflux(k) = 0.0 ; int_Sflux(k) = 0.0
       enddo
       do k=1,2*nkmb
@@ -717,7 +711,6 @@ subroutine regularize_layers_init(Time, G, GV, param_file, diag, CS)
 
 #include "version_variable.h"
   character(len=40)  :: mdl = "MOM_regularize_layers"  ! This module's name.
-  logical :: use_temperature
   logical :: default_2018_answers
   logical :: just_read
   integer :: isd, ied, jsd, jed

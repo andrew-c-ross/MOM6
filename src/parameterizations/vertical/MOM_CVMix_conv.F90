@@ -101,7 +101,7 @@ logical function CVMix_conv_init(Time, G, GV, US, param_file, diag, CS)
 
   call get_param(param_file, mdl, 'KD_CONV', CS%kd_conv_const, &
                  "Diffusivity used in convective regime. Corresponding viscosity "//&
-                 "(KV_CONV) will be set to KD_CONV * PRANDTL_TURB.", &
+                 "(KV_CONV) will be set to KD_CONV * PRANDTL_CONV.", &
                  units='m2/s', default=1.00)
 
   call get_param(param_file, mdl, 'BV_SQR_CONV', CS%bv_sqr_conv, &
@@ -275,7 +275,7 @@ subroutine calculate_CVMix_conv(h, tv, G, GV, US, CS, hbl, Kd, Kv, Kd_aux)
     ! if (CS%id_kd_conv > 0) &
     !   call hchksum(Kd_conv, "MOM_CVMix_conv: Kd_conv", G%HI, haloshift=0, scale=US%Z2_T_to_m2_s)
     ! if (CS%id_kv_conv > 0) &
-    !   call hchksum(Kv_conv, "MOM_CVMix_conv: Kv_conv", G%HI, haloshift=0, scale=US%m2_s_to_Z2_T)
+    !   call hchksum(Kv_conv, "MOM_CVMix_conv: Kv_conv", G%HI, haloshift=0, scale=US%Z2_T_to_m2_s)
     call hchksum(Kd, "MOM_CVMix_conv: Kd", G%HI, haloshift=0, scale=US%Z2_T_to_m2_s)
     call hchksum(Kv, "MOM_CVMix_conv: Kv", G%HI, haloshift=0, scale=US%Z2_T_to_m2_s)
   endif
@@ -293,7 +293,7 @@ end subroutine calculate_CVMix_conv
 logical function CVMix_conv_is_used(param_file)
   type(param_file_type), intent(in) :: param_file !< A structure to parse for run-time parameters
   call get_param(param_file, mdl, "USE_CVMix_CONVECTION", CVMix_conv_is_used, &
-                 default=.false., do_not_log = .true.)
+                 default=.false., do_not_log=.true.)
 
 end function CVMix_conv_is_used
 

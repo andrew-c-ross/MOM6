@@ -269,7 +269,6 @@ subroutine zonal_mass_flux(u, h_in, uh, dt, G, GV, US, CS, LB, OBC, por_face_are
   integer :: l_seg
   logical :: local_specified_BC, use_visc_rem, set_BT_cont, any_simple_OBC
   logical :: local_Flather_OBC, local_open_BC, is_simple
-  type(OBC_segment_type), pointer :: segment => NULL()
 
   use_visc_rem = present(visc_rem_u)
   local_specified_BC = .false. ; set_BT_cont = .false. ; local_Flather_OBC = .false.
@@ -604,7 +603,8 @@ subroutine zonal_flux_layer(u, h, h_L, h_R, uh, duhdu, visc_rem, dt, G, US, j, &
   endif
 end subroutine zonal_flux_layer
 
-!> Sets the effective interface thickness at each zonal velocity point.
+!> Sets the effective interface thickness at each zonal velocity point, optionally scaling
+!! back these thicknesses to account for viscosity and fractional open areas.
 subroutine zonal_face_thickness(u, h, h_L, h_R, h_u, dt, G, GV, US, LB, vol_CFL, &
                                 marginal, OBC, por_face_areaU, visc_rem_u)
   type(ocean_grid_type),                     intent(inout) :: G    !< Ocean's grid structure.
@@ -616,7 +616,10 @@ subroutine zonal_face_thickness(u, h, h_L, h_R, h_u, dt, G, GV, US, LB, vol_CFL,
                                                                    !! reconstruction [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)    :: h_R  !< Right thickness in the
                                                                    !! reconstruction [H ~> m or kg m-2].
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(inout) :: h_u  !< Thickness at zonal faces [H ~> m or kg m-2].
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(inout) :: h_u !< Effective thickness at zonal faces,
+                                                                   !! scaled down to account for the effects of
+                                                                   !! viscoity and the fractional open area
+                                                                   !! [H ~> m or kg m-2].
   real,                                      intent(in)    :: dt   !< Time increment [T ~> s].
   type(unit_scale_type),                     intent(in)    :: US   !< A dimensional unit scaling type
   type(loop_bounds_type),                    intent(in)    :: LB   !< Loop bounds structure.
@@ -672,11 +675,12 @@ subroutine zonal_face_thickness(u, h, h_L, h_R, h_u, dt, G, GV, US, LB, vol_CFL,
     else ; h_u(I,j,k) = h_avg ; endif
   enddo ; enddo ; enddo
   if (present(visc_rem_u)) then
-    !### The expression setting h_u should also be multiplied by por_face_areaU in this case,
-    !    and in the two OBC cases below with visc_rem_u.
+    ! Scale back the thickness to account for the effects of viscosity and the fractional open
+    ! thickness to give an appropriate non-normalized weight for each layer in determining the
+    ! barotropic acceleration.
     !$OMP parallel do default(shared)
     do k=1,nz ; do j=jsh,jeh ; do I=ish-1,ieh
-      h_u(I,j,k) = h_u(I,j,k) * visc_rem_u(I,j,k) !### * por_face_areaU(I,j,k)
+      h_u(I,j,k) = h_u(I,j,k) * (visc_rem_u(I,j,k) * por_face_areaU(I,j,k))
     enddo ; enddo ; enddo
   endif
 
@@ -689,7 +693,7 @@ subroutine zonal_face_thickness(u, h, h_L, h_R, h_u, dt, G, GV, US, LB, vol_CFL,
         if (OBC%segment(n)%direction == OBC_DIRECTION_E) then
           if (present(visc_rem_u)) then ; do k=1,nz
             do j = OBC%segment(n)%HI%jsd, OBC%segment(n)%HI%jed
-              h_u(I,j,k) = h(i,j,k) * visc_rem_u(I,j,k) !### * por_face_areaU(I,j,k)
+              h_u(I,j,k) = h(i,j,k) * (visc_rem_u(I,j,k) * por_face_areaU(I,j,k))
             enddo
           enddo ; else ; do k=1,nz
             do j = OBC%segment(n)%HI%jsd, OBC%segment(n)%HI%jed
@@ -699,7 +703,7 @@ subroutine zonal_face_thickness(u, h, h_L, h_R, h_u, dt, G, GV, US, LB, vol_CFL,
         else
           if (present(visc_rem_u)) then ; do k=1,nz
             do j = OBC%segment(n)%HI%jsd, OBC%segment(n)%HI%jed
-              h_u(I,j,k) = h(i+1,j,k) * visc_rem_u(I,j,k) !### * por_face_areaU(I,j,k)
+              h_u(I,j,k) = h(i+1,j,k) * (visc_rem_u(I,j,k) * por_face_areaU(I,j,k))
             enddo
           enddo ; else ; do k=1,nz
             do j = OBC%segment(n)%HI%jsd, OBC%segment(n)%HI%jed
@@ -1092,7 +1096,6 @@ subroutine meridional_mass_flux(v, h_in, vh, dt, G, GV, US, CS, LB, OBC, por_fac
   integer :: l_seg
   logical :: local_specified_BC, use_visc_rem, set_BT_cont, any_simple_OBC
   logical :: local_Flather_OBC, is_simple, local_open_BC
-  type(OBC_segment_type), pointer :: segment => NULL()
 
   use_visc_rem = present(visc_rem_v)
   local_specified_BC = .false. ; set_BT_cont = .false. ; local_Flather_OBC = .false.
@@ -1277,7 +1280,7 @@ subroutine meridional_mass_flux(v, h_in, vh, dt, G, GV, US, CS, LB, OBC, por_fac
             l_seg = OBC%segnum_v(i,J)
 
             do_I(I) = .false.
-            if(l_seg /= OBC_NONE) &
+            if (l_seg /= OBC_NONE) &
               do_I(i) = (OBC%segment(l_seg)%specified)
 
             if (do_I(i)) FAvi(i) = GV%H_subroundoff*G%dx_Cv(i,J)
@@ -1427,19 +1430,22 @@ subroutine merid_flux_layer(v, h, h_L, h_R, vh, dvhdv, visc_rem, dt, G, US, J, &
   endif
 end subroutine merid_flux_layer
 
-!> Sets the effective interface thickness at each meridional velocity point.
+!> Sets the effective interface thickness at each meridional velocity point, optionally scaling
+!! back these thicknesses to account for viscosity and fractional open areas.
 subroutine merid_face_thickness(v, h, h_L, h_R, h_v, dt, G, GV, US, LB, vol_CFL, &
                                 marginal, OBC, por_face_areaV, visc_rem_v)
   type(ocean_grid_type),                     intent(inout) :: G    !< Ocean's grid structure.
   type(verticalGrid_type),                   intent(in)    :: GV   !< Ocean's vertical grid structure.
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)    :: v    !< Meridional velocity [L T-1 ~> m s-1].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)   :: v    !< Meridional velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)    :: h    !< Layer thickness used to calculate fluxes,
                                                                    !! [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)    :: h_L  !< Left thickness in the reconstruction,
                                                                    !! [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)    :: h_R  !< Right thickness in the reconstruction,
                                                                    !! [H ~> m or kg m-2].
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(inout) :: h_v  !< Thickness at meridional faces,
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(inout) :: h_v !< Effective thickness at meridional faces,
+                                                                   !! scaled down to account for the effects of
+                                                                   !! viscoity and the fractional open area
                                                                    !! [H ~> m or kg m-2].
   real,                                      intent(in)    :: dt   !< Time increment [T ~> s].
   type(loop_bounds_type),                    intent(in)    :: LB   !< Loop bounds structure.
@@ -1497,11 +1503,12 @@ subroutine merid_face_thickness(v, h, h_L, h_R, h_v, dt, G, GV, US, LB, vol_CFL,
   enddo ; enddo ; enddo
 
   if (present(visc_rem_v)) then
-    !### This expression setting h_v should also be multiplied by por_face_areaU in this case,
-    !    and in the two OBC cases below with visc_rem_u.
+    ! Scale back the thickness to account for the effects of viscosity and the fractional open
+    ! thickness to give an appropriate non-normalized weight for each layer in determining the
+    ! barotropic acceleration.
     !$OMP parallel do default(shared)
     do k=1,nz ; do J=jsh-1,jeh ; do i=ish,ieh
-      h_v(i,J,k) = h_v(i,J,k) * visc_rem_v(i,J,k) !### * por_face_areaV(i,J,k)
+      h_v(i,J,k) = h_v(i,J,k) * (visc_rem_v(i,J,k) * por_face_areaV(i,J,k))
     enddo ; enddo ; enddo
   endif
 
@@ -1514,7 +1521,7 @@ subroutine merid_face_thickness(v, h, h_L, h_R, h_v, dt, G, GV, US, LB, vol_CFL,
         if (OBC%segment(n)%direction == OBC_DIRECTION_N) then
           if (present(visc_rem_v)) then ; do k=1,nz
             do i = OBC%segment(n)%HI%isd, OBC%segment(n)%HI%ied
-              h_v(i,J,k) = h(i,j,k) * visc_rem_v(i,J,k) !### * por_face_areaV(i,J,k)
+              h_v(i,J,k) = h(i,j,k) * (visc_rem_v(i,J,k) * por_face_areaV(i,J,k))
             enddo
           enddo ; else ; do k=1,nz
             do i = OBC%segment(n)%HI%isd, OBC%segment(n)%HI%ied
@@ -1524,7 +1531,7 @@ subroutine merid_face_thickness(v, h, h_L, h_R, h_v, dt, G, GV, US, LB, vol_CFL,
         else
           if (present(visc_rem_v)) then ; do k=1,nz
             do i = OBC%segment(n)%HI%isd, OBC%segment(n)%HI%ied
-              h_v(i,J,k) = h(i,j+1,k) * visc_rem_v(i,J,k) !### * por_face_areaV(i,J,k)
+              h_v(i,J,k) = h(i,j+1,k) * (visc_rem_v(i,J,k) * por_face_areaV(i,J,k))
             enddo
           enddo ; else ; do k=1,nz
             do i = OBC%segment(n)%HI%isd, OBC%segment(n)%HI%ied

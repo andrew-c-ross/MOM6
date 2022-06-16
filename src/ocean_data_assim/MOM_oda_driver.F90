@@ -79,9 +79,9 @@ end type ptr_mpp_domain
 
 !> A structure containing integer handles for bias adjustment of tracers
 type :: INC_CS
-   integer :: fldno = 0 !< The number of tracers
-   integer :: T_id !< The integer handle for the temperature file
-   integer :: S_id !< The integer handle for the salinity file
+  integer :: fldno = 0 !< The number of tracers
+  integer :: T_id !< The integer handle for the temperature file
+  integer :: S_id !< The integer handle for the salinity file
 end type INC_CS
 
 !> Control structure that contains a transpose of the ocean state across ensemble members.
@@ -134,6 +134,9 @@ type, public :: ODA_CS ; private
   type(INC_CS) :: INC_CS !< A Structure containing integer file handles for bias adjustment
   integer :: id_inc_t !< A diagnostic handle for the temperature climatological adjustment
   integer :: id_inc_s !< A diagnostic handle for the salinity climatological adjustment
+  logical :: answers_2018   !< If true, use the order of arithmetic and expressions for remapping
+                            !! that recover the answers from the end of 2018.  Otherwise, use more
+                            !! robust and accurate forms of mathematically equivalent expressions.
 end type ODA_CS
 
 
@@ -146,11 +149,12 @@ contains
 
 !> initialize First_guess (prior) and Analysis grid
 !! information for all ensemble members
-subroutine init_oda(Time, G, GV, diag_CS, CS)
+subroutine init_oda(Time, G, GV, US, diag_CS, CS)
 
   type(time_type), intent(in) :: Time !< The current model time.
   type(ocean_grid_type), pointer :: G !< domain and grid information for ocean model
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),   intent(in) :: US   !< A dimensional unit scaling type
   type(diag_ctrl), target, intent(inout) :: diag_CS !< A pointer to a diagnostic control structure
   type(ODA_CS), pointer, intent(inout) :: CS  !< The DA control structure
 
@@ -161,24 +165,17 @@ subroutine init_oda(Time, G, GV, diag_CS, CS)
   type(directories) :: dirs
 
   type(grid_type), pointer :: T_grid !< global tracer grid
-  real, dimension(:,:), allocatable :: global2D, global2D_old
-  real, dimension(:), allocatable :: lon1D, lat1D, glon1D, glat1D
   type(param_file_type) :: PF
-  integer :: n, m, k, i, j, nk
-  integer :: is,ie,js,je,isd,ied,jsd,jed
-  integer :: isg,ieg,jsg,jeg
-  integer :: idg_offset, jdg_offset
-  integer :: stdout_unit
+  integer :: n
+  integer :: isd, ied, jsd, jed
   integer, dimension(4) :: fld_sz
   character(len=32) :: assim_method
-  integer :: npes_pm, ens_info(6), ni, nj
-  character(len=128) :: mesg
-  character(len=32) :: fldnam
+  integer :: npes_pm, ens_info(6)
   character(len=30) :: coord_mode
   character(len=200) :: inputdir, basin_file
-  logical :: reentrant_x, reentrant_y, tripolar_N, symmetric
   character(len=80) :: remap_scheme
   character(len=80) :: bias_correction_file, inc_file
+  logical           :: default_2018_answers
 
   if (associated(CS)) call MOM_error(FATAL, 'Calling oda_init with associated control structure')
   allocate(CS)
@@ -235,6 +232,14 @@ subroutine init_oda(Time, G, GV, diag_CS, CS)
                  "for vertical remapping for all variables. "//&
                  "It can be one of the following schemes: "//&
                  trim(remappingSchemesDoc), default="PPM_H4")
+  call get_param(PF, mdl, "DEFAULT_2018_ANSWERS", default_2018_answers, &
+                 "This sets the default value for the various _2018_ANSWERS parameters.", &
+                 default=.false., do_not_log=.true.)
+  call get_param(PF, mdl, "ODA_2018_ANSWERS", CS%answers_2018, &
+                 "If true, use the order of arithmetic and expressions that recover the "//&
+                 "answers from original version of the ODA driver.  Otherwise, use updated and "//&
+                 "more robust forms of the same expressions.", default=default_2018_answers, &
+                 do_not_log=.true.)
   inputdir = slasher(inputdir)
 
   select case(lowercase(trim(assim_method)))
@@ -280,8 +285,7 @@ subroutine init_oda(Time, G, GV, diag_CS, CS)
   call clone_MOM_domain(CS%Grid%Domain, dG%Domain,symmetric=.false.)
   call set_grid_metrics(dG, PF, CS%US)
   call MOM_initialize_topography(dG%bathyT, dG%max_depth, dG, PF, CS%US)
-  call MOM_initialize_coord(CS%GV, CS%US, PF, .false., &
-           dirs%output_directory, tv_dummy, dG%max_depth)
+  call MOM_initialize_coord(CS%GV, CS%US, PF, tv_dummy, dG%max_depth)
   call ALE_init(PF, CS%GV, CS%US, dG%max_depth, CS%ALE_CS)
   call MOM_grid_init(CS%Grid, PF, global_indexing=.false.)
   call ALE_updateVerticalGridType(CS%ALE_CS, CS%GV)
@@ -338,9 +342,9 @@ subroutine init_oda(Time, G, GV, diag_CS, CS)
   ! set up diag variables for analysis increments
   CS%diag_CS => diag_CS
   CS%id_inc_t=register_diag_field('ocean_model','temp_increment',diag_CS%axesTL,&
-       Time,'ocean potential temperature increments','degC')
+       Time, 'ocean potential temperature increments', 'degC', conversion=US%C_to_degC)
   CS%id_inc_s=register_diag_field('ocean_model','salt_increment',diag_CS%axesTL,&
-       Time,'ocean salinity increments','psu')
+       Time, 'ocean salinity increments', 'psu', conversion=US%S_to_ppt)
 
   !!  get global grid information from ocean model needed for ODA initialization
   T_grid=>NULL()
@@ -353,28 +357,28 @@ subroutine init_oda(Time, G, GV, diag_CS, CS)
   call set_PElist(CS%ensemble_pelist(CS%ensemble_id,:))
 
   if (CS%do_bias_adjustment) then
-     call get_param(PF, mdl, "TEMP_SALT_ADJUSTMENT_FILE", bias_correction_file,  &
-       "The name of the file containing temperature and salinity "//&
-       "tendency adjustments", default='temp_salt_adjustment.nc')
+    call get_param(PF, mdl, "TEMP_SALT_ADJUSTMENT_FILE", bias_correction_file,  &
+                "The name of the file containing temperature and salinity "//&
+                "tendency adjustments", default='temp_salt_adjustment.nc')
 
-     inc_file = trim(inputdir) // trim(bias_correction_file)
-     CS%INC_CS%T_id = init_extern_field(inc_file, "temp_increment", &
+    inc_file = trim(inputdir) // trim(bias_correction_file)
+    CS%INC_CS%T_id = init_extern_field(inc_file, "temp_increment", &
           correct_leap_year_inconsistency=.true.,verbose=.true.,domain=G%Domain%mpp_domain)
-     CS%INC_CS%S_id = init_extern_field(inc_file, "salt_increment", &
+    CS%INC_CS%S_id = init_extern_field(inc_file, "salt_increment", &
           correct_leap_year_inconsistency=.true.,verbose=.true.,domain=G%Domain%mpp_domain)
-     call get_external_field_info(CS%INC_CS%T_id,size=fld_sz)
-     CS%INC_CS%fldno = 2
-     if (CS%nk .ne. fld_sz(3)) call MOM_error(FATAL,'Increment levels /= ODA levels')
-     allocate(CS%tv_bc)     ! storage for increment
-     allocate(CS%tv_bc%T(G%isd:G%ied,G%jsd:G%jed,CS%GV%ke), source=0.0)
-     allocate(CS%tv_bc%S(G%isd:G%ied,G%jsd:G%jed,CS%GV%ke), source=0.0)
+    call get_external_field_info(CS%INC_CS%T_id,size=fld_sz)
+    CS%INC_CS%fldno = 2
+    if (CS%nk /= fld_sz(3)) call MOM_error(FATAL,'Increment levels /= ODA levels')
+    allocate(CS%tv_bc)     ! storage for increment
+    allocate(CS%tv_bc%T(G%isd:G%ied,G%jsd:G%jed,CS%GV%ke), source=0.0)
+    allocate(CS%tv_bc%S(G%isd:G%ied,G%jsd:G%jed,CS%GV%ke), source=0.0)
   endif
 
   call cpu_clock_end(id_clock_oda_init)
 
 !  if (CS%write_obs) then
-!     temp_fid = open_profile_file("temp_"//trim(obs_file))
-!     salt_fid = open_profile_file("salt_"//trim(obs_file))
+!    temp_fid = open_profile_file("temp_"//trim(obs_file))
+!    salt_fid = open_profile_file("salt_"//trim(obs_file))
 !  end if
 
 end subroutine init_oda
@@ -388,15 +392,11 @@ subroutine set_prior_tracer(Time, G, GV, h, tv, CS)
   type(thermo_var_ptrs),                 intent(in) :: tv   !< A structure pointing to various thermodynamic variables
 
   type(ODA_CS), pointer :: CS !< ocean DA control structure
-  real, dimension(SZI_(G),SZJ_(G),CS%nk) :: T, S
-  type(ocean_grid_type), pointer :: Grid=>NULL()
-  integer :: i,j, m, n, ss
-  integer :: is, ie, js, je
+  real, dimension(SZI_(G),SZJ_(G),CS%nk) :: T  ! Temperature on the analysis grid [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),CS%nk) :: S  ! Salinity on the analysis grid [S ~> ppt]
+  integer :: i, j, m
   integer :: isc, iec, jsc, jec
-  integer :: isd, ied, jsd, jed
-  integer :: isg, ieg, jsg, jeg, idg_offset, jdg_offset
-  integer :: id
-  logical :: used, symmetric
+  real :: h_neglect, h_neglect_edge                 ! small thicknesses [H ~> m or kg m-2]
 
   ! return if not time for analysis
   if (Time < CS%Time) return
@@ -408,6 +408,14 @@ subroutine set_prior_tracer(Time, G, GV, h, tv, CS)
   call set_PElist(CS%filter_pelist)
   !call MOM_mesg('Setting prior')
 
+  if (.not. CS%answers_2018) then
+    h_neglect = GV%H_subroundoff ; h_neglect_edge = GV%H_subroundoff
+  elseif (GV%Boussinesq) then
+    h_neglect = GV%m_to_H * 1.0e-30 ; h_neglect_edge = GV%m_to_H * 1.0e-10
+  else
+    h_neglect = GV%kg_m2_to_H * 1.0e-30 ; h_neglect_edge = GV%kg_m2_to_H * 1.0e-10
+  endif
+
   ! computational domain for the analysis grid
   isc=CS%Grid%isc;iec=CS%Grid%iec;jsc=CS%Grid%jsc;jec=CS%Grid%jec
   ! array extents for the ensemble member
@@ -416,9 +424,9 @@ subroutine set_prior_tracer(Time, G, GV, h, tv, CS)
   ! remap temperature and salinity from the ensemble member to the analysis grid
   do j=G%jsc,G%jec ; do i=G%isc,G%iec
     call remapping_core_h(CS%remapCS, GV%ke, h(i,j,:), tv%T(i,j,:), &
-         CS%nk, CS%h(i,j,:), T(i,j,:))
+         CS%nk, CS%h(i,j,:), T(i,j,:), h_neglect, h_neglect_edge)
     call remapping_core_h(CS%remapCS, GV%ke, h(i,j,:), tv%S(i,j,:), &
-         CS%nk, CS%h(i,j,:), S(i,j,:))
+         CS%nk, CS%h(i,j,:), S(i,j,:), h_neglect, h_neglect_edge)
   enddo ; enddo
   ! cast ensemble members to the analysis domain
   do m=1,CS%ensemble_size
@@ -450,12 +458,12 @@ subroutine get_posterior_tracer(Time, CS, h, tv, increment)
   logical, optional, intent(in) :: increment !< True if returning increment only
 
   type(ocean_control_struct), pointer :: Ocean_increment=>NULL()
-  integer :: i, j, m
-  logical :: used, get_inc
+  integer :: m
+  logical :: get_inc
   integer :: seconds_per_hour = 3600.
 
   ! return if not analysis time (retain pointers for h and tv)
-  if (Time < CS%Time .or. CS%assim_method .eq. NO_ASSIM) return
+  if (Time < CS%Time .or. CS%assim_method == NO_ASSIM) return
 
 
   !! switch to global pelist
@@ -472,6 +480,8 @@ subroutine get_posterior_tracer(Time, CS, h, tv, increment)
     Ocean_increment%T = CS%Ocean_posterior%T - CS%Ocean_prior%T
     Ocean_increment%S = CS%Ocean_posterior%S - CS%Ocean_prior%S
   endif
+  ! It may be necessary to check whether the increment and ocean state have the
+  ! same dimensionally rescaled units.
   do m=1,CS%ensemble_size
     if (get_inc) then
       call redistribute_array(CS%mpp_domain, Ocean_increment%T(:,:,:,m),&
@@ -508,10 +518,6 @@ subroutine oda(Time, CS)
   type(time_type), intent(in) :: Time !< the current model time
   type(oda_CS), pointer :: CS !< A pointer the ocean DA control structure
 
-  integer :: i, j
-  integer :: m
-  integer :: yr, mon, day, hr, min, sec
-
   if ( Time >= CS%Time ) then
 
     !! switch to global pelist
@@ -523,51 +529,53 @@ subroutine oda(Time, CS)
     !! switch back to ensemble member pelist
     call set_PElist(CS%ensemble_pelist(CS%ensemble_id,:))
     call get_posterior_tracer(Time, CS, increment=.true.)
-    if (CS%do_bias_adjustment) call get_bias_correction_tracer(Time, CS)
+    if (CS%do_bias_adjustment) call get_bias_correction_tracer(Time, CS%US, CS)
 
   endif
 
   return
 end subroutine oda
 
-subroutine get_bias_correction_tracer(Time, CS)
-    type(time_type), intent(in) :: Time !< the current model time
-    type(ODA_CS), pointer :: CS !< ocean DA control structure
+subroutine get_bias_correction_tracer(Time, US, CS)
+  type(time_type), intent(in) :: Time !< the current model time
+  type(unit_scale_type), intent(in) :: US !< A dimensional unit scaling type
+  type(ODA_CS), pointer :: CS !< ocean DA control structure
 
-    integer :: i,j,k
-    real, allocatable, dimension(:,:,:) :: T_bias, S_bias
-    real, allocatable, dimension(:,:,:) :: mask_z
-    real, allocatable, dimension(:), target :: z_in, z_edges_in
-    real :: missing_value
-    integer,dimension(3) :: fld_sz
+  integer :: i,j,k
+  real, allocatable, dimension(:,:,:) :: T_bias ! Temperature biases [C ~> degC]
+  real, allocatable, dimension(:,:,:) :: S_bias ! Salinity biases [C ~> degC]
+  real, allocatable, dimension(:,:,:) :: mask_z
+  real, allocatable, dimension(:), target :: z_in, z_edges_in
+  real :: missing_value
+  integer,dimension(3) :: fld_sz
 
-    call cpu_clock_begin(id_clock_bias_adjustment)
-    call horiz_interp_and_extrap_tracer(CS%INC_CS%T_id,Time,1.0,CS%G,T_bias,&
-            mask_z,z_in,z_edges_in,missing_value,.true.,.false.,.false.,.true.)
-    call horiz_interp_and_extrap_tracer(CS%INC_CS%S_id,Time,1.0,CS%G,S_bias,&
-            mask_z,z_in,z_edges_in,missing_value,.true.,.false.,.false.,.true.)
+  call cpu_clock_begin(id_clock_bias_adjustment)
+  call horiz_interp_and_extrap_tracer(CS%INC_CS%T_id, Time, US%degC_to_C, CS%G, T_bias, &
+          mask_z, z_in, z_edges_in, missing_value, .true., .false., .false., .true.)
+  call horiz_interp_and_extrap_tracer(CS%INC_CS%S_id, Time, US%ppt_to_S, CS%G, S_bias, &
+          mask_z, z_in, z_edges_in, missing_value, .true., .false., .false., .true.)
 
-    ! This should be replaced to use mask_z instead of the following lines
-    ! which are intended to zero land values using an arbitrary limit.
-    fld_sz=shape(T_bias)
-    do i=1,fld_sz(1)
-       do j=1,fld_sz(2)
-          do k=1,fld_sz(3)
-             if (T_bias(i,j,k) .gt. 1.0E-3) T_bias(i,j,k) = 0.0
-             if (S_bias(i,j,k) .gt. 1.0E-3) S_bias(i,j,k) = 0.0
-          enddo
-       enddo
+  ! This should be replaced to use mask_z instead of the following lines
+  ! which are intended to zero land values using an arbitrary limit.
+  fld_sz=shape(T_bias)
+  do i=1,fld_sz(1)
+    do j=1,fld_sz(2)
+      do k=1,fld_sz(3)
+        if (T_bias(i,j,k) > 1.0E-3*US%degC_to_C) T_bias(i,j,k) = 0.0
+        if (S_bias(i,j,k) > 1.0E-3*US%ppt_to_S) S_bias(i,j,k) = 0.0
+      enddo
     enddo
+  enddo
 
-    CS%tv_bc%T = T_bias * CS%bias_adjustment_multiplier
-    CS%tv_bc%S = S_bias * CS%bias_adjustment_multiplier
+  CS%tv_bc%T = T_bias * CS%bias_adjustment_multiplier
+  CS%tv_bc%S = S_bias * CS%bias_adjustment_multiplier
 
-    call pass_var(CS%tv_bc%T, CS%domains(CS%ensemble_id))
-    call pass_var(CS%tv_bc%S, CS%domains(CS%ensemble_id))
+  call pass_var(CS%tv_bc%T, CS%domains(CS%ensemble_id))
+  call pass_var(CS%tv_bc%S, CS%domains(CS%ensemble_id))
 
-    call cpu_clock_end(id_clock_bias_adjustment)
+  call cpu_clock_end(id_clock_bias_adjustment)
 
-  end subroutine get_bias_correction_tracer
+end subroutine get_bias_correction_tracer
 
 !> Finalize DA module
 subroutine oda_end(CS)
@@ -582,7 +590,7 @@ subroutine init_ocean_ensemble(CS,Grid,GV,ens_size)
   type(verticalGrid_type), pointer :: GV !< Pointer to DA vertical grid
   integer, intent(in) :: ens_size !< ensemble size
 
-  integer :: n,is,ie,js,je,nk
+  integer :: is, ie, js, je, nk
 
   nk=GV%ke
   is=Grid%isd;ie=Grid%ied
@@ -643,19 +651,18 @@ subroutine apply_oda_tracer_increments(dt, Time_end, G, GV, tv, h, CS)
   type(ODA_CS), pointer                   :: CS !< the data assimilation structure
 
   !! local variables
-  integer :: yr, mon, day, hr, min, sec
-  integer :: i, j, k
+  integer :: i, j
   integer :: isc, iec, jsc, jec
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: T_inc !< an adjustment to the temperature
-                                                    !! tendency [degC T-1 -> degC s-1]
+                                                    !! tendency [C T-1 -> degC s-1]
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: S_inc !< an adjustment to the salinity
-                                                    !! tendency [g kg-1 T-1 -> g kg-1 s-1]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(CS%Grid)) :: T !< The updated temperature [degC]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(CS%Grid)) :: S !< The updated salinity [g kg-1]
-  real :: missing_value
+                                                    !! tendency [S T-1 -> ppt s-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(CS%Grid)) :: T !< The updated temperature [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(CS%Grid)) :: S !< The updated salinity [S ~> ppt]
+  real :: h_neglect, h_neglect_edge                 ! small thicknesses [H ~> m or kg m-2]
 
   if (.not. associated(CS)) return
-  if (CS%assim_method .eq. NO_ASSIM .and. (.not. CS%do_bias_adjustment)) return
+  if (CS%assim_method == NO_ASSIM .and. (.not. CS%do_bias_adjustment)) return
 
   call cpu_clock_begin(id_clock_apply_increments)
 
@@ -669,20 +676,28 @@ subroutine apply_oda_tracer_increments(dt, Time_end, G, GV, tv, h, CS)
     S = S + CS%tv_bc%S
   endif
 
+  if (.not. CS%answers_2018) then
+    h_neglect = GV%H_subroundoff ; h_neglect_edge = GV%H_subroundoff
+  elseif (GV%Boussinesq) then
+    h_neglect = GV%m_to_H * 1.0e-30 ; h_neglect_edge = GV%m_to_H * 1.0e-10
+  else
+    h_neglect = GV%kg_m2_to_H * 1.0e-30 ; h_neglect_edge = GV%kg_m2_to_H * 1.0e-10
+  endif
+
   isc=G%isc; iec=G%iec; jsc=G%jsc; jec=G%jec
   do j=jsc,jec; do i=isc,iec
     call remapping_core_h(CS%remapCS, CS%nk, CS%h(i,j,:), T(i,j,:), &
-         G%ke, h(i,j,:), T_inc(i,j,:))
+         G%ke, h(i,j,:), T_inc(i,j,:), h_neglect, h_neglect_edge)
     call remapping_core_h(CS%remapCS, CS%nk, CS%h(i,j,:), S(i,j,:), &
-         G%ke, h(i,j,:), S_inc(i,j,:))
+         G%ke, h(i,j,:), S_inc(i,j,:), h_neglect, h_neglect_edge)
   enddo; enddo
 
 
   call pass_var(T_inc, G%Domain)
   call pass_var(S_inc, G%Domain)
 
-  tv%T(isc:iec,jsc:jec,:)=tv%T(isc:iec,jsc:jec,:)+T_inc(isc:iec,jsc:jec,:)*dt
-  tv%S(isc:iec,jsc:jec,:)=tv%S(isc:iec,jsc:jec,:)+S_inc(isc:iec,jsc:jec,:)*dt
+  tv%T(isc:iec,jsc:jec,:) = tv%T(isc:iec,jsc:jec,:) + T_inc(isc:iec,jsc:jec,:)*dt
+  tv%S(isc:iec,jsc:jec,:) = tv%S(isc:iec,jsc:jec,:) + S_inc(isc:iec,jsc:jec,:)*dt
 
   call pass_var(tv%T, G%Domain)
   call pass_var(tv%S, G%Domain)

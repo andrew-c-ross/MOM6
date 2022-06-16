@@ -209,7 +209,6 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
 
 
   ! tmp array for surface properties
-  real :: surface_field(SZI_(G),SZJ_(G)) ! The surface temperature or salinity [degC] or [ppt]
   real :: pressure_1d(SZI_(G)) ! Temporary array for pressure when calling EOS [R L2 T-2 ~> Pa]
   real :: wt, wt_p ! The fractional weights of two successive values when interpolating from
                    ! a list [nondim], scaled so that wt + wt_p = 1.
@@ -233,9 +232,6 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
 
   ! This value is roughly (pi / (the age of the universe) )^2.
   absurdly_small_freq2 = 1e-34*US%T_to_s**2
-
-  if (loc(CS)==0) call MOM_error(FATAL, &
-         "calculate_diagnostic_fields: Module must be initialized before used.")
 
   if (.not. CS%initialized) call MOM_error(FATAL, &
          "calculate_diagnostic_fields: Module must be initialized before used.")
@@ -329,7 +325,7 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
       work_3d(i,j,k) = GV%H_to_kg_m2*h(i,j,k)
     enddo ; enddo ; enddo
     call post_data(CS%id_masscello, work_3d, CS%diag)
-    !### If the registration call has conversion=GV%H_to_kg, the mathematically equivalent form would be:
+    !### If the registration call has conversion=GV%H_to_kg_m2, the mathematically equivalent form would be:
     ! call post_data(CS%id_masscello, h, CS%diag)
   endif
 
@@ -377,7 +373,7 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
             pressure_1d(i) = pressure_1d(i) + 0.5*(GV%H_to_RZ*GV%g_Earth)*h(i,j,k)
           enddo
           ! Store in-situ density [R ~> kg m-3] in work_3d
-          call calculate_density(tv%T(:,j,k), tv%S(:,j,k), pressure_1d, rho_in_situ, &
+          call calculate_density(tv%T(:,j,k), tv%S(:,j,k),  pressure_1d, rho_in_situ, &
                                  tv%eqn_of_state, EOSdom)
           do i=is,ie ! Cell thickness = dz = dp/(g*rho) (meter); store in work_3d
             work_3d(i,j,k) = (GV%H_to_RZ*h(i,j,k)) / rho_in_situ(i)
@@ -404,7 +400,7 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
     ! for some diagnostics using TEOS-10 function calls.
     if ((CS%id_Tpot > 0) .or. (CS%id_tob > 0)) then
       do k=1,nz ; do j=js,je ; do i=is,ie
-        work_3d(i,j,k) = gsw_pt_from_ct(tv%S(i,j,k),tv%T(i,j,k))
+        work_3d(i,j,k) = US%degC_to_C*gsw_pt_from_ct(US%S_to_ppt*tv%S(i,j,k),US%C_to_degC*tv%T(i,j,k))
       enddo ; enddo ; enddo
       if (CS%id_Tpot > 0) call post_data(CS%id_Tpot, work_3d, CS%diag)
       if (CS%id_tob > 0) call post_data(CS%id_tob, work_3d(:,:,nz), CS%diag, mask=G%mask2dT)
@@ -421,7 +417,7 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
     ! for some diagnostics using TEOS-10 function calls.
     if ((CS%id_Sprac > 0) .or. (CS%id_sob > 0)) then
       do k=1,nz ; do j=js,je ; do i=is,ie
-        work_3d(i,j,k) = gsw_sp_from_sr(tv%S(i,j,k))
+        work_3d(i,j,k) = US%ppt_to_S*gsw_sp_from_sr(US%S_to_ppt*tv%S(i,j,k))
       enddo ; enddo ; enddo
       if (CS%id_Sprac > 0) call post_data(CS%id_Sprac, work_3d, CS%diag)
       if (CS%id_sob > 0) call post_data(CS%id_sob, work_3d(:,:,nz), CS%diag, mask=G%mask2dT)
@@ -433,43 +429,37 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
 
   ! volume mean potential temperature
   if (CS%id_thetaoga>0) then
-    thetaoga = global_volume_mean(tv%T, h, G, GV)
+    thetaoga = global_volume_mean(tv%T, h, G, GV, scale=US%C_to_degC)
     call post_data(CS%id_thetaoga, thetaoga, CS%diag)
   endif
 
   ! area mean SST
   if (CS%id_tosga > 0) then
-    do j=js,je ; do i=is,ie
-      surface_field(i,j) = tv%T(i,j,1)
-    enddo ; enddo
-    tosga = global_area_mean(tv%T(:,:,1), G)
+    tosga = global_area_mean(tv%T(:,:,1), G, scale=US%C_to_degC)
     call post_data(CS%id_tosga, tosga, CS%diag)
   endif
 
   ! volume mean salinity
   if (CS%id_soga>0) then
-    soga = global_volume_mean(tv%S, h, G, GV)
+    soga = global_volume_mean(tv%S, h, G, GV, scale=US%S_to_ppt)
     call post_data(CS%id_soga, soga, CS%diag)
   endif
 
   ! area mean SSS
   if (CS%id_sosga > 0) then
-    do j=js,je ; do i=is,ie
-       surface_field(i,j) = tv%S(i,j,1)
-    enddo ; enddo
-    sosga = global_area_mean(surface_field, G)
+    sosga = global_area_mean(tv%S(:,:,1), G, scale=US%S_to_ppt)
     call post_data(CS%id_sosga, sosga, CS%diag)
   endif
 
   ! layer mean potential temperature
   if (CS%id_temp_layer_ave>0) then
-    temp_layer_ave = global_layer_mean(tv%T, h, G, GV)
+    temp_layer_ave = global_layer_mean(tv%T, h, G, GV, scale=US%C_to_degC)
     call post_data(CS%id_temp_layer_ave, temp_layer_ave, CS%diag)
   endif
 
   ! layer mean salinity
   if (CS%id_salt_layer_ave>0) then
-    salt_layer_ave = global_layer_mean(tv%S, h, G, GV)
+    salt_layer_ave = global_layer_mean(tv%S, h, G, GV, scale=US%S_to_ppt)
     call post_data(CS%id_salt_layer_ave, salt_layer_ave, CS%diag)
   endif
 
@@ -484,7 +474,7 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
       pressure_1d(:) = tv%P_Ref
       !$OMP parallel do default(shared)
       do k=1,nz ; do j=js-1,je+1
-        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), pressure_1d, Rcv(:,j,k), tv%eqn_of_state, &
+        call calculate_density(tv%T(:,j,k), tv%S(:,j,k),  pressure_1d, Rcv(:,j,k), tv%eqn_of_state, &
                                EOSdom)
       enddo ; enddo
     else ! Rcv should not be used much in this case, so fill in sensible values.
@@ -610,7 +600,7 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
       pressure_1d(:) = 0.
       !$OMP parallel do default(shared)
       do k=1,nz ; do j=js,je
-        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), pressure_1d, Rcv(:,j,k), &
+        call calculate_density(tv%T(:,j,k), tv%S(:,j,k),  pressure_1d, Rcv(:,j,k), &
                                 tv%eqn_of_state, EOSdom)
       enddo ; enddo
       if (CS%id_rhopot0 > 0) call post_data(CS%id_rhopot0, Rcv, CS%diag)
@@ -619,7 +609,7 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
       pressure_1d(:) = 2.0e7*US%kg_m3_to_R*US%m_s_to_L_T**2 ! 2000 dbars
       !$OMP parallel do default(shared)
       do k=1,nz ; do j=js,je
-        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), pressure_1d, Rcv(:,j,k), &
+        call calculate_density(tv%T(:,j,k), tv%S(:,j,k),  pressure_1d, Rcv(:,j,k), &
                                 tv%eqn_of_state, EOSdom)
       enddo ; enddo
       if (CS%id_rhopot2 > 0) call post_data(CS%id_rhopot2, Rcv, CS%diag)
@@ -630,8 +620,8 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
         pressure_1d(:) = 0. ! Start at p=0 Pa at surface
         do k=1,nz
           pressure_1d(:) =  pressure_1d(:) + 0.5 * h(:,j,k) * (GV%H_to_RZ*GV%g_Earth) ! Pressure in middle of layer k
-          call calculate_density(tv%T(:,j,k), tv%S(:,j,k), pressure_1d, Rcv(:,j,k), &
-                                tv%eqn_of_state, EOSdom)
+          call calculate_density(tv%T(:,j,k), tv%S(:,j,k),  pressure_1d, Rcv(:,j,k), &
+                                 tv%eqn_of_state, EOSdom)
           pressure_1d(:) =  pressure_1d(:) + 0.5 * h(:,j,k) * (GV%H_to_RZ*GV%g_Earth) ! Pressure at bottom of layer k
         enddo
       enddo
@@ -643,11 +633,11 @@ subroutine calculate_diagnostic_fields(u, v, h, uh, vh, tv, ADp, CDp, p_surf, &
       do j=js,je
         pressure_1d(:) = 0. ! Start at p=0 Pa at surface
         do k=1,nz
-          pressure_1d(:) =  pressure_1d(:) + 0.5 * h(:,j,k) * GV%H_to_Pa ! Pressure in middle of layer k
+          pressure_1d(:) =  pressure_1d(:) + 0.5 * h(:,j,k) * (GV%H_to_RZ*GV%g_Earth) ! Pressure in middle of layer k
           ! To avoid storing more arrays, put drho_dT into Rcv, and drho_dS into work3d
-          call calculate_density_derivs(tv%T(:,j,k),tv%S(:,j,k),pressure_1d, &
-                                 Rcv(:,j,k),work_3d(:,j,k),is,ie-is+1, tv%eqn_of_state)
-          pressure_1d(:) =  pressure_1d(:) + 0.5 * h(:,j,k) * GV%H_to_Pa ! Pressure at bottom of layer k
+          call calculate_density_derivs(tv%T(:,j,k), tv%S(:,j,k), pressure_1d, &
+                                        Rcv(:,j,k), work_3d(:,j,k), tv%eqn_of_state, EOSdom)
+          pressure_1d(:) =  pressure_1d(:) + 0.5 * h(:,j,k) * (GV%H_to_RZ*GV%g_Earth) ! Pressure at bottom of layer k
         enddo
       enddo
       if (CS%id_drho_dT > 0) call post_data(CS%id_drho_dT, Rcv, CS%diag)
@@ -1293,32 +1283,27 @@ subroutine post_surface_thermo_diags(IDs, G, GV, US, diag, dt_int, sfc_state, tv
 
   real, dimension(SZI_(G),SZJ_(G)) :: work_2d  ! A 2-d work array
   real, dimension(SZI_(G),SZJ_(G)) :: &
-    zos  ! dynamic sea lev (zero area mean) from inverse-barometer adjusted ssh [m]
+    zos  ! dynamic sea lev (zero area mean) from inverse-barometer adjusted ssh [Z ~> m]
   real :: I_time_int    ! The inverse of the time interval [T-1 ~> s-1].
-  real :: zos_area_mean ! Global area mean sea surface height [m]
+  real :: zos_area_mean ! Global area mean sea surface height [Z ~> m]
   real :: volo          ! Total volume of the ocean [m3]
-  real :: ssh_ga        ! Global ocean area weighted mean sea seaface height [m]
+  real :: ssh_ga        ! Global ocean area weighted mean sea seaface height [Z ~> m]
   integer :: i, j, is, ie, js, je
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
 
   ! area mean SSH
   if (IDs%id_ssh_ga > 0) then
-    ssh_ga = global_area_mean(ssh, G, scale=US%Z_to_m)
+    ssh_ga = global_area_mean(ssh, G, tmp_scale=US%Z_to_m)
     call post_data(IDs%id_ssh_ga, ssh_ga, diag)
   endif
 
   ! post the dynamic sea level, zos, and zossq.
-  ! zos is ave_ssh with sea ice inverse barometer removed,
-  ! and with zero global area mean.
+  ! zos is ave_ssh with sea ice inverse barometer removed, and with zero global area mean.
   if (IDs%id_zos > 0 .or. IDs%id_zossq > 0) then
-    zos(:,:) = 0.0
+    zos_area_mean = global_area_mean(ssh_ibc, G, tmp_scale=US%Z_to_m)
     do j=js,je ; do i=is,ie
-      zos(i,j) = US%Z_to_m*ssh_ibc(i,j)
-    enddo ; enddo
-    zos_area_mean = global_area_mean(zos, G)
-    do j=js,je ; do i=is,ie
-      zos(i,j) = zos(i,j) - G%mask2dT(i,j)*zos_area_mean
+      zos(i,j) = ssh_ibc(i,j) - G%mask2dT(i,j)*zos_area_mean
     enddo ; enddo
     if (IDs%id_zos > 0) call post_data(IDs%id_zos, zos, diag, mask=G%mask2dT)
     if (IDs%id_zossq > 0) then
@@ -1605,19 +1590,21 @@ subroutine MOM_diagnostics_init(MIS, ADp, CDp, Time, G, GV, US, param_file, diag
   if (use_temperature) then
     if (tv%T_is_conT) then
       CS%id_Tpot = register_diag_field('ocean_model', 'temp', diag%axesTL, &
-          Time, 'Potential Temperature', 'degC')
+          Time, 'Potential Temperature', 'degC', conversion=US%C_to_degC)
     endif
     if (tv%S_is_absS) then
       CS%id_Sprac = register_diag_field('ocean_model', 'salt', diag%axesTL, &
-          Time, 'Salinity', 'psu')
+          Time, 'Salinity', 'psu', conversion=US%S_to_ppt)
     endif
 
     CS%id_tob = register_diag_field('ocean_model','tob', diag%axesT1, Time, &
         long_name='Sea Water Potential Temperature at Sea Floor', &
-        standard_name='sea_water_potential_temperature_at_sea_floor', units='degC')
+        standard_name='sea_water_potential_temperature_at_sea_floor', &
+        units='degC', conversion=US%C_to_degC)
     CS%id_sob = register_diag_field('ocean_model','sob',diag%axesT1, Time, &
         long_name='Sea Water Salinity at Sea Floor', &
-        standard_name='sea_water_salinity_at_sea_floor', units='psu')
+        standard_name='sea_water_salinity_at_sea_floor', &
+        units='psu', conversion=US%S_to_ppt)
 
     CS%id_temp_layer_ave = register_diag_field('ocean_model', 'temp_layer_ave', &
         diag%axesZL, Time, 'Layer Average Ocean Temperature', 'degC')
@@ -1677,9 +1664,11 @@ subroutine MOM_diagnostics_init(MIS, ADp, CDp, Time, G, GV, US, param_file, diag
   CS%id_rhoinsitu = register_diag_field('ocean_model', 'rhoinsitu', diag%axesTL, Time, &
       'In situ density', 'kg m-3', conversion=US%R_to_kg_m3)
   CS%id_drho_dT = register_diag_field('ocean_model', 'drho_dT', diag%axesTL, Time, &
-      'Partial derivative of rhoinsitu with respect to temperature (alpha)', 'kg m-3 degC-1')
+      'Partial derivative of rhoinsitu with respect to temperature (alpha)', &
+      'kg m-3 degC-1', conversion=US%R_to_kg_m3*US%degC_to_C)
   CS%id_drho_dS = register_diag_field('ocean_model', 'drho_dS', diag%axesTL, Time, &
-      'Partial derivative of rhoinsitu with respect to salinity (beta)', 'kg^2 g-1 m-3')
+      'Partial derivative of rhoinsitu with respect to salinity (beta)', &
+      'kg^2 g-1 m-3', conversion=US%R_to_kg_m3*US%ppt_to_S)
 
   CS%id_du_dt = register_diag_field('ocean_model', 'dudt', diag%axesCuL, Time, &
       'Zonal Acceleration', 'm s-2', conversion=US%L_T2_to_m_s2)
@@ -1801,13 +1790,15 @@ subroutine MOM_diagnostics_init(MIS, ADp, CDp, Time, G, GV, US, param_file, diag
 
   if (use_temperature) then
     CS%id_temp_int = register_diag_field('ocean_model', 'temp_int', diag%axesT1, Time,                &
-        'Density weighted column integrated potential temperature', 'degC kg m-2', conversion=US%RZ_to_kg_m2, &
+        'Density weighted column integrated potential temperature', &
+        'degC kg m-2', conversion=US%C_to_degC*US%RZ_to_kg_m2, &
         cmor_field_name='opottempmint',                                                               &
         cmor_long_name='integral_wrt_depth_of_product_of_sea_water_density_and_potential_temperature',&
         cmor_standard_name='Depth integrated density times potential temperature')
 
     CS%id_salt_int = register_diag_field('ocean_model', 'salt_int', diag%axesT1, Time,   &
-        'Density weighted column integrated salinity', 'psu kg m-2', conversion=US%RZ_to_kg_m2, &
+        'Density weighted column integrated salinity', &
+        'psu kg m-2', conversion=US%S_to_ppt*US%RZ_to_kg_m2, &
         cmor_field_name='somint',                                                        &
         cmor_long_name='integral_wrt_depth_of_product_of_sea_water_density_and_salinity',&
         cmor_standard_name='Depth integrated density times salinity')
@@ -1844,14 +1835,14 @@ subroutine register_surface_diags(Time, G, US, IDs, diag, tv)
       standard_name='sea_water_volume')
   IDs%id_zos = register_diag_field('ocean_model', 'zos', diag%axesT1, Time,&
       standard_name = 'sea_surface_height_above_geoid',                   &
-      long_name= 'Sea surface height above geoid', units='m')
+      long_name= 'Sea surface height above geoid', units='m', conversion=US%Z_to_m)
   IDs%id_zossq = register_diag_field('ocean_model', 'zossq', diag%axesT1, Time,&
       standard_name='square_of_sea_surface_height_above_geoid',             &
-      long_name='Square of sea surface height above geoid', units='m2')
+      long_name='Square of sea surface height above geoid', units='m2', conversion=US%Z_to_m**2)
   IDs%id_ssh = register_diag_field('ocean_model', 'SSH', diag%axesT1, Time, &
       'Sea Surface Height', 'm', conversion=US%Z_to_m)
   IDs%id_ssh_ga = register_scalar_field('ocean_model', 'ssh_ga', Time, diag,&
-      long_name='Area averaged sea surface height', units='m',            &
+      long_name='Area averaged sea surface height', units='m', conversion=US%Z_to_m, &
       standard_name='area_averaged_sea_surface_height')
   IDs%id_ssu = register_diag_field('ocean_model', 'SSU', diag%axesCu1, Time, &
       'Sea Surface Zonal Velocity', 'm s-1', conversion=US%L_T_to_m_s)
@@ -1896,7 +1887,7 @@ subroutine register_surface_diags(Time, G, US, IDs, diag, tv)
 
   IDs%id_salt_deficit = register_diag_field('ocean_model', 'salt_deficit', diag%axesT1, Time, &
          'Salt source in ocean required to supply excessive ice salt fluxes', &
-         'ppt kg m-2 s-1', conversion=US%RZ_T_to_kg_m2s)
+         'ppt kg m-2 s-1', conversion=US%S_to_ppt*US%RZ_T_to_kg_m2s)
   IDs%id_Heat_PmE = register_diag_field('ocean_model', 'Heat_PmE', diag%axesT1, Time, &
          'Heat flux into ocean from mass flux into ocean', &
          'W m-2', conversion=US%QRZ_T_to_W_m2)
@@ -2125,7 +2116,7 @@ subroutine write_static_fields(G, GV, US, tv, diag)
   use_temperature = associated(tv%T)
   if (use_temperature) then
     id = register_static_field('ocean_model','C_p', diag%axesNull, &
-         'heat capacity of sea water', 'J kg-1 K-1', conversion=US%Q_to_J_kg, &
+         'heat capacity of sea water', 'J kg-1 K-1', conversion=US%Q_to_J_kg*US%degC_to_C, &
          cmor_field_name='cpocean', &
          cmor_standard_name='specific_heat_capacity_of_sea_water', &
          cmor_long_name='specific_heat_capacity_of_sea_water')

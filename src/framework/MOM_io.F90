@@ -21,7 +21,6 @@ use MOM_io_infra,         only : get_field_size, fieldtype, field_exists, get_fi
 use MOM_io_infra,         only : get_file_times, axistype, get_axis_data, get_filename_suffix
 use MOM_io_infra,         only : write_field, write_metadata, write_version
 use MOM_io_infra,         only : MOM_namelist_file, check_namelist_error, io_infra_init, io_infra_end
-use MOM_io_infra,         only : stdout_if_root
 use MOM_io_infra,         only : APPEND_FILE, ASCII_FILE, MULTIPLE, NETCDF_FILE, OVERWRITE_FILE
 use MOM_io_infra,         only : READONLY_FILE, SINGLE_FILE, WRITEONLY_FILE
 use MOM_io_infra,         only : CENTER, CORNER, NORTH_FACE, EAST_FACE
@@ -51,6 +50,8 @@ public :: MOM_read_data, MOM_read_vector, read_field_chksum
 public :: slasher, write_field, write_version_number
 public :: io_infra_init, io_infra_end
 public :: stdout_if_root
+public :: get_var_axes_info
+public :: get_axis_info
 ! This is used to set up information descibing non-domain-decomposed axes.
 public :: axis_info, set_axis_info, delete_axis_info
 ! This is used to set up global file attributes
@@ -98,6 +99,7 @@ end interface MOM_write_field
 interface read_variable
   module procedure read_variable_0d, read_variable_0d_int
   module procedure read_variable_1d, read_variable_1d_int
+  module procedure read_variable_2d
 end interface read_variable
 
 !> Read a global or variable attribute from a named netCDF file using netCDF calls
@@ -584,6 +586,11 @@ subroutine reopen_file(IO_handle, filename, vars, novars, fields, threading, tim
 
 end subroutine reopen_file
 
+!> Return the index of sdtout if called from the root PE, or 0 for other PEs.
+integer function stdout_if_root()
+  stdout_if_root = 0
+  if (is_root_PE()) stdout_if_root = stdout
+end function stdout_if_root
 
 !> This function determines how many time levels a variable has in a file.
 function num_timelevels(filename, varname, min_dims) result(n_time)
@@ -596,7 +603,7 @@ function num_timelevels(filename, varname, min_dims) result(n_time)
   integer :: n_time                           !< number of time levels varname has in filename
 
   character(len=256) :: msg
-  integer :: ncid, status, varid, ndims
+  integer :: ndims
   integer :: sizes(8)
 
   n_time = -1
@@ -886,6 +893,135 @@ subroutine read_variable_1d_int(filename, varname, var, ncid_in)
 
   call broadcast(var, size(var), blocking=.true.)
 end subroutine read_variable_1d_int
+
+!> Read a 2d array from a netCDF input file and save to a variable.
+!!
+!! Start and nread lenths may exceed var rank.  This allows for reading slices
+!! of larger arrays.
+!!
+!! Previous versions of the model required a time axis on IO fields.  This
+!! constraint was dropped in later versions.  As a result, versions both with
+!! and without a time axis now exist.  In order to support all such versions,
+!! we use a reshaped version of start and nread in order to read the variable
+!! as it exists in the file.
+!!
+!! Certain constraints are still applied to start and nread in order to ensure
+!! that varname is a valid 2d array, or contains valid 2d slices.
+!!
+!! I/O occurs only on the root PE, and data is broadcast to other ranks.
+!! Due to potentially large memory communication and storage, this subroutine
+!! should only be used when domain-decomposition is unavaialable.
+subroutine read_variable_2d(filename, varname, var, start, nread, ncid_in)
+  character(len=*), intent(in) :: filename  !< Name of file to be read
+  character(len=*), intent(in) :: varname   !< Name of variable to be read
+  real, intent(out)            :: var(:,:)  !< Output array of variable
+  integer, optional, intent(in) :: start(:) !< Starting index on each axis.
+  integer, optional, intent(in) :: nread(:) !< Number of values to be read along each axis
+  integer, optional, intent(in) :: ncid_in  !< netCDF ID of an opened file.
+              !! If absent, the file is opened and closed within this routine.
+
+  integer :: ncid, varid
+  integer :: field_ndims, dim_len
+  integer, allocatable :: field_dimids(:), field_shape(:)
+  integer, allocatable :: field_start(:), field_nread(:)
+  integer :: i, rc
+  character(len=*), parameter :: hdr = "read_variable_2d: "
+
+  ! Validate shape of start and nread
+  if (present(start)) then
+    if (size(start) < 2) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+        // " start must have at least two dimensions.")
+  endif
+
+  if (present(nread)) then
+    if (size(nread) < 2) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+        // " nread must have at least two dimensions.")
+
+    if (any(nread(3:) > 1)) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+        // " nread may only read a single level in higher dimensions.")
+  endif
+
+  ! Since start and nread may be reshaped, we cannot rely on netCDF to ensure
+  ! that their lengths are equivalent, and must do it here.
+  if (present(start) .and. present(nread)) then
+    if (size(start) /= size(nread)) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+        // " start and nread must have the same length.")
+  endif
+
+  ! Open and read `varname` from `filename`
+  if (is_root_pe()) then
+    if (present(ncid_in)) then
+      ncid = ncid_in
+    else
+      call open_file_to_Read(filename, ncid)
+    endif
+
+    call get_varid(varname, ncid, filename, varid, match_case=.false.)
+    if (varid < 0) call MOM_error(FATAL, "Unable to get netCDF varid for "//trim(varname)//&
+                                         " in "//trim(filename))
+
+    ! Query for the dimensionality of the input field
+    rc = nf90_inquire_variable(ncid, varid, ndims=field_ndims)
+    if (rc /= NF90_NOERR) call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) //&
+          ": Difficulties reading "//trim(varname)//" from "//trim(filename))
+
+    ! Confirm that field is at least 2d
+    if (field_ndims < 2) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) // " " // &
+          trim(varname) // " from " // trim(filename) // " is not a 2D field.")
+
+    ! If start and nread are present, then reshape them to match field dims
+    if (present(start) .or. present(nread)) then
+      allocate(field_shape(field_ndims))
+      allocate(field_dimids(field_ndims))
+
+      rc = nf90_inquire_variable(ncid, varid, dimids=field_dimids)
+      if (rc /= NF90_NOERR) call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) //&
+            ": Difficulties reading "//trim(varname)//" from "//trim(filename))
+
+      do i = 1, field_ndims
+        rc = nf90_inquire_dimension(ncid, field_dimids(i), len=dim_len)
+        if (rc /= NF90_NOERR) &
+          call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+              // ": Difficulties reading dimensions from " // trim(filename))
+        field_shape(i) = dim_len
+      enddo
+
+      ! Reshape start(:) and nreads(:) in case ranks differ
+      allocate(field_start(field_ndims))
+      field_start(:) = 1
+      if (present(start)) then
+        dim_len = min(size(start), size(field_start))
+        field_start(:dim_len) = start(:dim_len)
+      endif
+
+      allocate(field_nread(field_ndims))
+      field_nread(:2) = field_shape(:2)
+      field_nread(3:) = 1
+      if (present(nread)) field_shape(:2) = nread(:2)
+
+      rc = nf90_get_var(ncid, varid, var, field_start, field_nread)
+
+      deallocate(field_start)
+      deallocate(field_nread)
+      deallocate(field_shape)
+      deallocate(field_dimids)
+    else
+      rc = nf90_get_var(ncid, varid, var)
+    endif
+
+    if (rc /= NF90_NOERR) call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) //&
+          " Difficulties reading "//trim(varname)//" from "//trim(filename))
+
+    if (.not.present(ncid_in)) call close_file_to_read(ncid, filename)
+  endif
+
+  call broadcast(var, size(var), blocking=.true.)
+end subroutine read_variable_2d
 
 !> Read a character-string global or variable attribute
 subroutine read_attribute_str(filename, attname, att_val, varname, found, all_read, ncid_in)
@@ -1542,6 +1678,32 @@ subroutine delete_axis_info(axes)
   enddo
 end subroutine delete_axis_info
 
+
+!> Retrieve the information from an axis_info type.
+subroutine get_axis_info(axis,name,longname,units,cartesian,ax_size,ax_data)
+  type(axis_info), intent(in) :: axis                               !< An axis type
+  character(len=*), intent(out), optional    :: name                !< The axis name.
+  character(len=*), intent(out), optional    :: longname            !< The axis longname.
+  character(len=*), intent(out), optional    :: units               !< The axis units.
+  character(len=*), intent(out), optional    :: cartesian           !< The cartesian attribute
+                                                                    !! of the axis [X,Y,Z,T].
+  integer,          intent(out), optional   :: ax_size              !< The size of the axis.
+  real, optional, allocatable, dimension(:), intent(out) :: ax_data !< The axis label data.
+
+  if (present(ax_data)) then
+    if (allocated(ax_data)) deallocate(ax_data)
+    allocate(ax_data(axis%ax_size))
+    ax_data(:) = axis%ax_data
+  endif
+
+  if (present(name)) name = axis%name
+  if (present(longname)) longname = axis%longname
+  if (present(units)) units = axis%units
+  if (present(cartesian)) cartesian = axis%cartesian
+  if (present(ax_size)) ax_size = axis%ax_size
+
+end subroutine get_axis_info
+
 !> Store information that can be used to create an attribute in a subsequent call to create_file.
 subroutine set_attribute_info(attribute, name, str_value)
   type(attribute_info), intent(inout) :: attribute !< A type with information about a named attribute
@@ -1945,7 +2107,6 @@ subroutine MOM_write_field_4d(IO_handle, field_md, MOM_domain, field, tstamp, ti
   real, allocatable :: field_rot(:,:,:,:)  ! A rotated version of field, with the same units or rescaled
   real :: scale_fac ! A scaling factor to use before writing the array
   integer :: qturns ! The number of quarter turns through which to rotate field
-  integer :: is, ie, js, je ! The extent of the computational domain
 
   qturns = 0 ; if (present(turns)) qturns = modulo(turns, 4)
   scale_fac = 1.0 ; if (present(scale)) scale_fac = scale
@@ -1980,7 +2141,6 @@ subroutine MOM_write_field_3d(IO_handle, field_md, MOM_domain, field, tstamp, ti
   real, allocatable :: field_rot(:,:,:)  ! A rotated version of field, with the same units or rescaled
   real :: scale_fac ! A scaling factor to use before writing the array
   integer :: qturns ! The number of quarter turns through which to rotate field
-  integer :: is, ie, js, je ! The extent of the computational domain
 
   qturns = 0 ; if (present(turns)) qturns = modulo(turns, 4)
   scale_fac = 1.0 ; if (present(scale)) scale_fac = scale
@@ -2015,7 +2175,6 @@ subroutine MOM_write_field_2d(IO_handle, field_md, MOM_domain, field, tstamp, ti
   real, allocatable :: field_rot(:,:)  ! A rotated version of field, with the same units
   real :: scale_fac ! A scaling factor to use before writing the array
   integer :: qturns ! The number of quarter turns through which to rotate field
-  integer :: is, ie, js, je ! The extent of the computational domain
 
   qturns = 0 ; if (present(turns)) qturns = modulo(turns, 4)
   scale_fac = 1.0 ; if (present(scale)) scale_fac = scale
@@ -2144,7 +2303,7 @@ function ensembler(name, ens_no_in) result(en_nm)
   character(10) :: ens_num_char
   character(3)  :: code_str
   integer :: ens_no
-  integer :: n, is, ie
+  integer :: n, is
 
   en_nm = trim(name)
   if (index(name,"%") == 0) return
@@ -2233,7 +2392,79 @@ subroutine MOM_io_init(param_file)
   call log_version(param_file, mdl, version)
 
 end subroutine MOM_io_init
+!> Returns the dimension variable information for a netCDF variable
+subroutine get_var_axes_info(filename, fieldname, axes_info)
+  character(len=*), intent(in) ::            filename  !< A filename from which to read
+  character(len=*), intent(in) ::            fieldname !< The name of the field to read
+  type(axis_info), dimension(4), intent(inout) :: axes_info !< A returned array of field axis information
 
+  !! local variables
+  integer ::  rcode
+  logical :: success
+  integer ::  ncid, varid, ndims
+  integer :: id, jd, kd
+  integer, dimension(4) :: dims, dim_id
+  character(len=128)  :: dim_name(4)
+  integer, dimension(1) :: start, count
+  !! cartesian axis data
+  real, allocatable, dimension(:) :: x
+  real, allocatable, dimension(:) :: y
+  real, allocatable, dimension(:) :: z
+
+
+  call open_file_to_read(filename, ncid, success=success)
+
+  rcode = NF90_INQ_VARID(ncid, trim(fieldname), varid)
+  if (rcode /= 0) call MOM_error(FATAL,"error finding variable "//trim(fieldname)//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+
+  rcode = NF90_INQUIRE_VARIABLE(ncid, varid, ndims=ndims, dimids=dims)
+  if (rcode /= 0) call MOM_error(FATAL, "Error inquiring about the dimensions of "//trim(fieldname)//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+  if (ndims < 3) call MOM_error(FATAL,"Variable "//trim(fieldname)//" in file "//trim(filename)// &
+                                " has too few dimensions to be read as a 3-d array.")
+  rcode = NF90_INQUIRE_DIMENSION(ncid, dims(1), dim_name(1), len=id)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 1 data for "// &
+                trim(fieldname)//" in file "// trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQ_VARID(ncid, dim_name(1), dim_id(1))
+  if (rcode /= 0) call MOM_error(FATAL,"error finding variable "//trim(dim_name(1))//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQUIRE_DIMENSION(ncid, dims(2), dim_name(2), len=jd)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 2 data for "// &
+                trim(fieldname)//" in file "// trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQ_VARID(ncid, dim_name(2), dim_id(2))
+  if (rcode /= 0) call MOM_error(FATAL,"error finding variable "//trim(dim_name(2))//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQUIRE_DIMENSION(ncid, dims(3), dim_name(3), len=kd)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 3 data for "// &
+                trim(fieldname)//" in file "// trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQ_VARID(ncid, dim_name(3), dim_id(3))
+  if (rcode /= 0) call MOM_error(FATAL,"error finding variable "//trim(dim_name(3))//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+  allocate(x(id), y(jd), z(kd))
+
+  start = 1 ; count = 1 ; count(1) = id
+  rcode = NF90_GET_VAR(ncid, dim_id(1), x, start, count)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 1 values for var_name "// &
+                trim(fieldname)//",dim_name "//trim(dim_name(1))//" in file "// trim(filename)//" in hinterp_extrap")
+  start = 1 ; count = 1 ; count(1) = jd
+  rcode = NF90_GET_VAR(ncid, dim_id(2), y, start, count)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 2 values for var_name "// &
+                trim(fieldname)//",dim_name "//trim(dim_name(2))//" in file "// trim(filename)//" in  hinterp_extrap")
+  start = 1 ; count = 1 ; count(1) = kd
+  rcode = NF90_GET_VAR(ncid, dim_id(3), z, start, count)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 3 values for var_name "// &
+                trim(fieldname//",dim_name "//trim(dim_name(3)))//" in file "// trim(filename)//" in  hinterp_extrap")
+
+  call set_axis_info(axes_info(1), name=trim(dim_name(1)), ax_size=id, ax_data=x,cartesian='X')
+  call set_axis_info(axes_info(2), name=trim(dim_name(2)), ax_size=jd, ax_data=y,cartesian='Y')
+  call set_axis_info(axes_info(3), name=trim(dim_name(3)), ax_size=kd, ax_data=z,cartesian='Z')
+
+  call close_file_to_read(ncid, filename)
+
+  deallocate(x,y,z)
+
+end subroutine get_var_axes_info
 !> \namespace mom_io
 !!
 !!   This file contains a number of subroutines that manipulate
