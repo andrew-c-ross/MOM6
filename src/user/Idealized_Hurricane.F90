@@ -133,8 +133,8 @@ subroutine idealized_hurricane_wind_init(Time, G, US, param_file, CS)
                  units='Pa', default=96800., scale=US%m_s_to_L_T**2*US%kg_m3_to_R)
   call get_param(param_file, mdl, "IDL_HURR_RAD_MAX_WIND", &
                  CS%rad_max_wind, "Radius of maximum winds used in the "//&
-                 "idealized hurricane wind profile.", units='m', &
-                 default=50.e3, scale=US%m_to_L)
+                 "idealized hurricane wind profile.", &
+                 units='m', default=50.e3, scale=US%m_to_L)
   call get_param(param_file, mdl, "IDL_HURR_MAX_WIND", CS%max_windspeed, &
                  "Maximum wind speed used in the idealized hurricane"// &
                  "wind profile.", units='m/s', default=65., scale=US%m_s_to_L_T)
@@ -143,8 +143,8 @@ subroutine idealized_hurricane_wind_init(Time, G, US, param_file, CS)
                  "hurricane wind profile.", units='m/s', default=5.0, scale=US%m_s_to_L_T)
   call get_param(param_file, mdl, "IDL_HURR_TRAN_DIR", CS%hurr_translation_dir, &
                  "Translation direction (towards) of hurricane used in the "//&
-                 "idealized hurricane wind profile.", units='degrees', &
-                 default=180.0, scale=CS%Deg2Rad)
+                 "idealized hurricane wind profile.", &
+                 units='degrees', default=180.0, scale=CS%Deg2Rad)
   call get_param(param_file, mdl, "IDL_HURR_X0", CS%Hurr_cen_X0, &
                  "Idealized Hurricane initial X position", &
                  units='m', default=0., scale=US%m_to_L)
@@ -152,19 +152,17 @@ subroutine idealized_hurricane_wind_init(Time, G, US, param_file, CS)
                  "Idealized Hurricane initial Y position", &
                  units='m', default=0., scale=US%m_to_L)
   call get_param(param_file, mdl, "IDL_HURR_TAU_CURR_REL", CS%relative_tau, &
-                 "Current relative stress switch "//&
-                 "used in the idealized hurricane wind profile.", &
-                 units='', default=.false.)
+                 "Current relative stress switch used in the idealized hurricane wind profile.", &
+                 default=.false.)
 
   ! Parameters for SCM mode
   call get_param(param_file, mdl, "IDL_HURR_SCM_BR_BENCH", CS%BR_BENCH, &
                  "Single column mode benchmark case switch, which is "// &
                  "invoking a modification (bug) in the wind profile meant to "//&
-                 "reproduce a previous implementation.", units='', default=.false.)
+                 "reproduce a previous implementation.", default=.false.)
   call get_param(param_file, mdl, "IDL_HURR_SCM", CS%SCM_MODE, &
-                 "Single Column mode switch "//&
-                 "used in the SCM idealized hurricane wind profile.", &
-                 units='', default=.false.)
+                 "Single Column mode switch used in the SCM idealized hurricane wind profile.", &
+                 default=.false.)
   call get_param(param_file, mdl, "IDL_HURR_SCM_LOCY", CS%dy_from_center, &
                  "Y distance of station used in the SCM idealized hurricane "//&
                  "wind profile.", units='m', default=50.e3, scale=US%m_to_L)
@@ -186,8 +184,8 @@ subroutine idealized_hurricane_wind_init(Time, G, US, param_file, CS)
                  "parameters from vertical units of m to kg m-2.", &
                  units="kg m-3", default=1035.0, scale=US%kg_m3_to_R, do_not_log=.true.)
   call get_param(param_file, mdl, "GUST_CONST", CS%gustiness, &
-                 "The background gustiness in the winds.", units="Pa", &
-                 default=0.0, scale=US%kg_m3_to_R*US%m_s_to_L_T**2*US%L_to_Z, do_not_log=.true.)
+                 "The background gustiness in the winds.", &
+                 units="Pa", default=0.0, scale=US%kg_m2s_to_RZ_T*US%m_s_to_L_T, do_not_log=.true.)
 
   if (CS%BR_BENCH) then
     CS%rho_a = 1.2*US%kg_m3_to_R
@@ -238,9 +236,9 @@ subroutine idealized_hurricane_wind_forcing(sfc_state, forces, day, G, US, CS)
   call allocate_mech_forcing(G, forces, stress=.true., ustar=.true.)
 
   if (CS%relative_tau) then
-     REL_TAU_FAC = 1.
+    REL_TAU_FAC = 1.
   else
-     REL_TAU_FAC = 0. !Multiplied to 0 surface current
+    REL_TAU_FAC = 0. !Multiplied to 0 surface current
   endif
 
   !> Compute storm center location
@@ -432,9 +430,9 @@ subroutine idealized_hurricane_wind_profile(CS, US, absf, YY, XX, UOCN, VOCN, Tx
   ALPH = A0 - A1*cos(CS%hurr_translation_dir-Adir-P1)
   if ( (radius > 10.*CS%rad_max_wind) .and.&
        (radius < 15.*CS%rad_max_wind) ) then
-     ALPH = ALPH*(15.0 - radius/CS%rad_max_wind)/5.
+    ALPH = ALPH*(15.0 - radius/CS%rad_max_wind)/5.
   elseif (radius > 15.*CS%rad_max_wind) then
-     ALPH = 0.0
+    ALPH = 0.0
   endif
   ALPH = ALPH * CS%Deg2Rad
 
@@ -520,7 +518,7 @@ subroutine SCM_idealized_hurricane_wind_forcing(sfc_state, forces, day, G, US, C
     C = CS%max_windspeed / sqrt( US%R_to_kg_m3*dP )
     B = C**2 * US%R_to_kg_m3*CS%rho_a * exp(1.0)
     if (BR_Bench) then ! rho_a reset to value used in generated wind for benchmark test
-       B = C**2 * 1.2 * exp(1.0)
+      B = C**2 * 1.2 * exp(1.0)
     endif
   elseif (BR_Bench) then ! rho_a reset to value used in generated wind for benchmark test
     B = (CS%max_windspeed**2 / dP ) * 1.2*US%kg_m3_to_R * exp(1.0)
@@ -545,12 +543,12 @@ subroutine SCM_idealized_hurricane_wind_forcing(sfc_state, forces, day, G, US, C
   !       be maintained.  Causes winds far from storm center to be a
   !       couple of m/s higher than the correct Holland prof.
   if (BR_Bench) then
-     rkm = rad/1000.
-     rB = (US%L_to_m*rkm)**B
+    rkm = rad/1000.
+    rB = (US%L_to_m*rkm)**B
   else
-     ! if not comparing to benchmark, then use correct Holland prof.
-     rkm = rad
-     rB = (US%L_to_m*rad)**B
+    ! if not comparing to benchmark, then use correct Holland prof.
+    rkm = rad
+    rB = (US%L_to_m*rad)**B
   endif
   !/ BR
   ! Calculate U10 in the interior (inside of 10x radius of maximum wind),
@@ -561,11 +559,11 @@ subroutine SCM_idealized_hurricane_wind_forcing(sfc_state, forces, day, G, US, C
   elseif (rad > 10.*CS%rad_max_wind .AND. rad < 12.*CS%rad_max_wind) then
     rad=(CS%rad_max_wind)*10.
     if (BR_Bench) then
-       rkm = rad/1000.
-       rB = (US%L_to_m*rkm)**B
+      rkm = rad/1000.
+      rB = (US%L_to_m*rkm)**B
     else
-       rkm = rad
-       rB = (US%L_to_m*rad)**B
+      rkm = rad
+      rB = (US%L_to_m*rad)**B
     endif
     U10 = ( sqrt( A*B*dP*exp(-A/rB)/(1.2*US%kg_m3_to_R*rB) + 0.25*(rkm*f_local)**2 ) - 0.5*rkm*f_local) &
           * (12. - rad/CS%rad_max_wind)/2.
@@ -588,14 +586,14 @@ subroutine SCM_idealized_hurricane_wind_forcing(sfc_state, forces, day, G, US, C
     ALPH = 0.0
   endif
   ALPH = ALPH * Deg2Rad
- !/BR
+  !/BR
   ! Prepare for wind calculation
   ! X_TS is component of translation speed added to wind vector
   ! due to background steering wind.
   U_TS = CS%hurr_translation_spd*0.5*cos(transdir)
   V_TS = CS%hurr_translation_spd*0.5*sin(transdir)
 
-  ! Set the surface wind stresses, in [Pa]. A positive taux
+  ! Set the surface wind stresses, in [R L Z T-2 ~> Pa]. A positive taux
   ! accelerates the ocean to the (pseudo-)east.
   !   The i-loop extends to is-1 so that taux can be used later in the
   ! calculation of ustar - otherwise the lower bound would be Isq.

@@ -10,7 +10,6 @@ use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
 use MOM_file_parser, only : get_param, param_file_type, log_version
 use MOM_forcing_type, only : forcing, allocate_forcing_type
 use MOM_grid, only : ocean_grid_type
-use MOM_io, only : file_exists, read_data
 use MOM_safe_alloc, only : safe_alloc_ptr
 use MOM_time_manager, only : time_type, operator(+), operator(/), get_time
 use MOM_tracer_flow_control, only : call_tracer_set_forcing
@@ -53,14 +52,12 @@ subroutine dumbbell_buoyancy_forcing(sfc_state, fluxes, day, dt, G, US, CS)
                                                          !! have NULL ptrs.
   type(time_type),               intent(in)    :: day    !< Time of the fluxes.
   real,                          intent(in)    :: dt     !< The amount of time over which
-                                                         !! the fluxes apply [s]
+                                                         !! the fluxes apply [T ~> s]
   type(ocean_grid_type),         intent(in)    :: G      !< The ocean's grid structure
   type(unit_scale_type),         intent(in)    :: US     !< A dimensional unit scaling type
   type(dumbbell_surface_forcing_CS),  pointer  :: CS     !< A control structure returned by a previous
                                                          !! call to dumbbell_surface_forcing_init
   ! Local variables
-  real :: Temp_restore   ! The temperature that is being restored toward [degC].
-  real :: Salin_restore  ! The salinity that is being restored toward [ppt].
   integer :: i, j, is, ie, js, je
   integer :: isd, ied, jsd, jed
 
@@ -127,7 +124,7 @@ subroutine dumbbell_buoyancy_forcing(sfc_state, fluxes, day, dt, G, US, CS)
 end subroutine dumbbell_buoyancy_forcing
 
 !> Dynamic forcing for the dumbbell test case
-subroutine dumbbell_dynamic_forcing(sfc_state, fluxes, day, dt, G, CS)
+subroutine dumbbell_dynamic_forcing(sfc_state, fluxes, day, dt, G, US, CS)
   type(surface),                 intent(inout) :: sfc_state  !< A structure containing fields that
                                                        !! describe the surface state of the ocean.
   type(forcing),                 intent(inout) :: fluxes !< A structure containing pointers to any
@@ -135,15 +132,17 @@ subroutine dumbbell_dynamic_forcing(sfc_state, fluxes, day, dt, G, CS)
                                                        !! have NULL ptrs.
   type(time_type),               intent(in)    :: day  !< Time of the fluxes.
   real,                          intent(in)    :: dt   !< The amount of time over which
-                                                       !! the fluxes apply [s]
+                                                       !! the fluxes apply [T ~> s]
   type(ocean_grid_type),         intent(in)    :: G    !< The ocean's grid structure
+  type(unit_scale_type),         intent(in)    :: US   !< A dimensional unit scaling type
   type(dumbbell_surface_forcing_CS),  pointer  :: CS   !< A control structure returned by a previous
                                                        !! call to dumbbell_surface_forcing_init
   ! Local variables
   integer :: i, j, is, ie, js, je
   integer :: isd, ied, jsd, jed
   integer :: idays, isecs
-  real :: deg_rad, rdays
+  real :: deg_rad  ! A conversion factor from degrees to radians [nondim]
+  real :: rdays    ! The elapsed time [days]
 
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
@@ -179,11 +178,12 @@ subroutine dumbbell_surface_forcing_init(Time, G, US, param_file, diag, CS)
   type(dumbbell_surface_forcing_CS), &
                                 pointer    :: CS   !< A pointer to the control structure for this module
   ! Local variables
-  real :: S_surf, S_range
-  real :: x, y
+  real :: S_surf  ! Initial surface salinity [ppt]
+  real :: S_range ! Range of the initial vertical distribution of salinity [ppt]
+  real :: x       ! Latitude normalized by the domain size [nondim]
   integer :: i, j
   logical :: dbrotate    ! If true, rotate the domain.
-#include "version_variable.h"
+# include "version_variable.h"
   character(len=40)  :: mdl = "dumbbell_surface_forcing" ! This module's name.
 
   if (associated(CS)) then
@@ -213,7 +213,7 @@ subroutine dumbbell_surface_forcing_init(Time, G, US, param_file, diag, CS)
                  units="Pa", default = 10000.0, scale=US%kg_m3_to_R*US%m_s_to_L_T**2)
   call get_param(param_file, mdl, "DUMBBELL_SLP_PERIOD", CS%slp_period, &
                  "Periodicity of SLP forcing in reservoirs.", &
-                 units="days", default = 1.0)
+                 units="days", default=1.0)
   call get_param(param_file, mdl, "DUMBBELL_ROTATION", dbrotate, &
                 'Logical for rotation of dumbbell domain.',&
                  units='nondim', default=.false., do_not_log=.true.)
@@ -226,7 +226,7 @@ subroutine dumbbell_surface_forcing_init(Time, G, US, param_file, diag, CS)
   call get_param(param_file, mdl, "RESTOREBUOY", CS%restorebuoy, &
                  "If true, the buoyancy fluxes drive the model back "//&
                  "toward some specified surface state with a rate "//&
-                 "given by FLUXCONST.", default= .false.)
+                 "given by FLUXCONST.", default=.false.)
   if (CS%restorebuoy) then
     call get_param(param_file, mdl, "FLUXCONST", CS%Flux_const, &
                  "The constant that relates the restoring surface fluxes to the relative "//&
@@ -236,7 +236,7 @@ subroutine dumbbell_surface_forcing_init(Time, G, US, param_file, diag, CS)
     CS%Flux_const = CS%Flux_const / 86400.0
 
 
-    allocate(CS%forcing_mask(G%isd:G%ied, G%jsd:G%jed)); CS%forcing_mask(:,:)=0.0
+    allocate(CS%forcing_mask(G%isd:G%ied, G%jsd:G%jed), source=0.0)
     allocate(CS%S_restore(G%isd:G%ied, G%jsd:G%jed))
 
     do j=G%jsc,G%jec

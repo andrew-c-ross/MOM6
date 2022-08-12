@@ -1,0 +1,35 @@
+name: Code coverage
+
+on: [push, pull_request]
+
+jobs:
+  build-test-nans:
+
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .testing
+
+    env:
+      REPORT_COVERAGE: true
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        submodules: recursive
+
+    - uses: ./.github/actions/ubuntu-setup
+
+    - uses: ./.github/actions/testing-setup
+
+    - name: Compile unit testing
+      run: make -j build/unit/MOM6
+
+    - name: Run unit tests
+      run: make unit.cov.upload
+
+    - name: Compile MOM6 with code coverage
+      run: make -j build/cov/MOM6
+
+    - name: Run and post coverage
+      run: make run.cov -k -s

@@ -36,8 +36,8 @@ type SCM_CVMix_tests_CS ; private
   logical :: UseHeatFlux    !< True to use heat flux
   logical :: UseEvaporation !< True to use evaporation
   logical :: UseDiurnalSW   !< True to use diurnal sw radiation
-  real :: tau_x !< (Constant) Wind stress, X [Pa]
-  real :: tau_y !< (Constant) Wind stress, Y [Pa]
+  real :: tau_x !< (Constant) Wind stress, X [R L Z T-2 ~> Pa]
+  real :: tau_y !< (Constant) Wind stress, Y [R L Z T-2 ~> Pa]
   real :: surf_HF !< (Constant) Heat flux [degC Z T-1 ~> m degC s-1]
   real :: surf_evap !< (Constant) Evaporation rate [Z T-1 ~> m s-1]
   real :: Max_sw !< maximum of diurnal sw radiation [degC Z T-1 ~> degC m s-1]
@@ -52,35 +52,31 @@ character(len=40)  :: mdl = "SCM_CVMix_tests" !< This module's name.
 contains
 
 !> Initializes temperature and salinity for the SCM CVMix test example
-subroutine SCM_CVMix_tests_TS_init(T, S, h, G, GV, US, param_file, just_read_params)
-  real, dimension(NIMEM_,NJMEM_, NKMEM_), intent(out) :: T  !< Potential temperature [degC]
-  real, dimension(NIMEM_,NJMEM_, NKMEM_), intent(out) :: S  !< Salinity [psu]
-  real, dimension(NIMEM_,NJMEM_, NKMEM_), intent(in)  :: h  !< Layer thickness [H ~> m or kg m-2]
-  type(ocean_grid_type),                  intent(in)  :: G  !< Grid structure
-  type(verticalGrid_type),                intent(in)  :: GV !< Vertical grid structure
-  type(unit_scale_type),                  intent(in)  :: US !< A dimensional unit scaling type
-  type(param_file_type),                  intent(in)  :: param_file !< Input parameter structure
-  logical,       optional, intent(in)  :: just_read_params !< If present and true, this call will
-                                                      !! only read parameters without changing h.
+subroutine SCM_CVMix_tests_TS_init(T, S, h, G, GV, US, param_file, just_read)
+  type(ocean_grid_type),                     intent(in)  :: G  !< Grid structure
+  type(verticalGrid_type),                   intent(in)  :: GV !< Vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: T  !< Potential temperature [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: S  !< Salinity [S ~> ppt]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h  !< Layer thickness [H ~> m or kg m-2]
+  type(unit_scale_type),                     intent(in)  :: US !< A dimensional unit scaling type
+  type(param_file_type),                     intent(in)  :: param_file !< Input parameter structure
+  logical,                                   intent(in)  :: just_read !< If present and true, this call
+                                                               !! will only read parameters without changing T & S.
   ! Local variables
   real :: UpperLayerTempMLD !< Upper layer Temp MLD thickness [Z ~> m].
   real :: UpperLayerSaltMLD !< Upper layer Salt MLD thickness [Z ~> m].
-  real :: UpperLayerTemp !< Upper layer temperature (SST if thickness 0) [degC]
-  real :: UpperLayerSalt !< Upper layer salinity (SSS if thickness 0) [ppt]
-  real :: LowerLayerTemp !< Temp at top of lower layer [degC]
-  real :: LowerLayerSalt !< Salt at top of lower layer [ppt]
-  real :: LowerLayerdTdz !< Temp gradient in lower layer [degC / Z ~> degC m-1].
-  real :: LowerLayerdSdz !< Salt gradient in lower layer [ppt / Z ~> ppt m-1].
-  real :: LowerLayerMinTemp !< Minimum temperature in lower layer [degC]
+  real :: UpperLayerTemp !< Upper layer temperature (SST if thickness 0) [C ~> degC]
+  real :: UpperLayerSalt !< Upper layer salinity (SSS if thickness 0) [S ~> ppt]
+  real :: LowerLayerTemp !< Temp at top of lower layer [C ~> degC]
+  real :: LowerLayerSalt !< Salt at top of lower layer [S ~> ppt]
+  real :: LowerLayerdTdz !< Temp gradient in lower layer [C Z-1 ~> degC m-1].
+  real :: LowerLayerdSdz !< Salt gradient in lower layer [S Z-1 ~> ppt m-1].
+  real :: LowerLayerMinTemp !< Minimum temperature in lower layer [C ~> degC]
   real :: zC, DZ, top, bottom ! Depths and thicknesses [Z ~> m].
-  logical :: just_read    ! If true, just read parameters but set nothing.
   integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
-
-
-  just_read = .false. ; if (present(just_read_params)) just_read = just_read_params
 
   if (.not.just_read) call log_version(param_file, mdl, version)
   call get_param(param_file, mdl, "SCM_TEMP_MLD", UpperLayerTempMLD, &
@@ -90,21 +86,21 @@ subroutine SCM_CVMix_tests_TS_init(T, S, h, G, GV, US, param_file, just_read_par
                  'Initial salt mixed layer depth', &
                  units='m', default=0.0, scale=US%m_to_Z, do_not_log=just_read)
   call get_param(param_file, mdl, "SCM_L1_SALT", UpperLayerSalt, &
-                 'Layer 2 surface salinity', units='1e-3', default=35.0, do_not_log=just_read)
+                 'Layer 2 surface salinity', units='1e-3', default=35.0, scale=US%ppt_to_S, do_not_log=just_read)
   call get_param(param_file, mdl, "SCM_L1_TEMP", UpperLayerTemp, &
-                 'Layer 1 surface temperature', units='C', default=20.0, do_not_log=just_read)
+                 'Layer 1 surface temperature', units='C', default=20.0, scale=US%degC_to_C, do_not_log=just_read)
   call get_param(param_file, mdl, "SCM_L2_SALT", LowerLayerSalt, &
-                 'Layer 2 surface salinity', units='1e-3', default=35.0, do_not_log=just_read)
+                 'Layer 2 surface salinity', units='1e-3', default=35.0, scale=US%ppt_to_S, do_not_log=just_read)
   call get_param(param_file, mdl, "SCM_L2_TEMP", LowerLayerTemp, &
-                 'Layer 2 surface temperature', units='C', default=20.0, do_not_log=just_read)
+                 'Layer 2 surface temperature', units='C', default=20.0, scale=US%degC_to_C, do_not_log=just_read)
   call get_param(param_file, mdl, "SCM_L2_DTDZ", LowerLayerdTdZ,     &
                  'Initial temperature stratification in layer 2', &
-                 units='C/m', default=0.0, scale=US%Z_to_m, do_not_log=just_read)
+                 units='C/m', default=0.0, scale=US%degC_to_C*US%Z_to_m, do_not_log=just_read)
   call get_param(param_file, mdl, "SCM_L2_DSDZ", LowerLayerdSdZ,  &
                  'Initial salinity stratification in layer 2', &
-                 units='PPT/m', default=0.0, scale=US%Z_to_m, do_not_log=just_read)
+                 units='PPT/m', default=0.0, scale=US%ppt_to_S*US%Z_to_m, do_not_log=just_read)
   call get_param(param_file, mdl, "SCM_L2_MINTEMP",LowerLayerMinTemp, &
-                 'Layer 2 minimum temperature', units='C', default=4.0, do_not_log=just_read)
+                 'Layer 2 minimum temperature', units='C', default=4.0, scale=US%degC_to_C, do_not_log=just_read)
 
   if (just_read) return ! All run-time parameters have been read, so return.
 
@@ -147,48 +143,39 @@ subroutine SCM_CVMix_tests_surface_forcing_init(Time, G, param_file, CS)
 
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
-  call get_param(param_file, mdl, "SCM_USE_WIND_STRESS",              &
-                 CS%UseWindStress, "Wind Stress switch "//            &
-                 "used in the SCM CVMix surface forcing.",            &
-                 units='', default=.false.)
-  call get_param(param_file, mdl, "SCM_USE_HEAT_FLUX",                &
-                 CS%UseHeatFlux, "Heat flux switch "//                &
-                 "used in the SCM CVMix test surface forcing.",       &
-                 units='', default=.false.)
-  call get_param(param_file, mdl, "SCM_USE_EVAPORATION",              &
-                 CS%UseEvaporation, "Evaporation switch "//           &
-                 "used in the SCM CVMix test surface forcing.",       &
-                 units='', default=.false.)
-  call get_param(param_file, mdl, "SCM_USE_DIURNAL_SW",               &
-                 CS%UseDiurnalSW, "Diurnal sw radation switch "//     &
-                 "used in the SCM CVMix test surface forcing.",       &
-                 units='', default=.false.)
+  call get_param(param_file, mdl, "SCM_USE_WIND_STRESS", CS%UseWindStress, &
+                 "Wind Stress switch used in the SCM CVMix surface forcing.", &
+                 default=.false.)
+  call get_param(param_file, mdl, "SCM_USE_HEAT_FLUX", CS%UseHeatFlux, &
+                 "Heat flux switch used in the SCM CVMix test surface forcing.", &
+                 default=.false.)
+  call get_param(param_file, mdl, "SCM_USE_EVAPORATION", CS%UseEvaporation, &
+                 "Evaporation switch used in the SCM CVMix test surface forcing.", &
+                 default=.false.)
+  call get_param(param_file, mdl, "SCM_USE_DIURNAL_SW", CS%UseDiurnalSW, &
+                 "Diurnal sw radation switch used in the SCM CVMix test surface forcing.", &
+                 default=.false.)
   if (CS%UseWindStress) then
-    call get_param(param_file, mdl, "SCM_TAU_X",                      &
-                 CS%tau_x, "Constant X-dir wind stress "//            &
-                 "used in the SCM CVMix test surface forcing.",       &
+    call get_param(param_file, mdl, "SCM_TAU_X", CS%tau_x, &
+                 "Constant X-dir wind stress used in the SCM CVMix test surface forcing.", &
                  units='N/m2', scale=US%kg_m2s_to_RZ_T*US%m_s_to_L_T, fail_if_missing=.true.)
-    call get_param(param_file, mdl, "SCM_TAU_Y",                      &
-                 CS%tau_y, "Constant y-dir wind stress "//            &
-                 "used in the SCM CVMix test surface forcing.",       &
+    call get_param(param_file, mdl, "SCM_TAU_Y", CS%tau_y, &
+                 "Constant y-dir wind stress used in the SCM CVMix test surface forcing.", &
                  units='N/m2', scale=US%kg_m2s_to_RZ_T*US%m_s_to_L_T, fail_if_missing=.true.)
   endif
   if (CS%UseHeatFlux) then
-    call get_param(param_file, mdl, "SCM_HEAT_FLUX",                  &
-                 CS%surf_HF, "Constant surface heat flux "//          &
-                 "used in the SCM CVMix test surface forcing.",       &
+    call get_param(param_file, mdl, "SCM_HEAT_FLUX", CS%surf_HF, &
+                 "Constant surface heat flux used in the SCM CVMix test surface forcing.", &
                  units='m K/s', scale=US%m_to_Z*US%T_to_s, fail_if_missing=.true.)
   endif
   if (CS%UseEvaporation) then
-    call get_param(param_file, mdl, "SCM_EVAPORATION",                &
-                 CS%surf_evap, "Constant surface evaporation "//      &
-                 "used in the SCM CVMix test surface forcing.",       &
+    call get_param(param_file, mdl, "SCM_EVAPORATION", CS%surf_evap, &
+                 "Constant surface evaporation used in the SCM CVMix test surface forcing.", &
                  units='m/s', scale=US%m_to_Z*US%T_to_s, fail_if_missing=.true.)
   endif
   if (CS%UseDiurnalSW) then
-    call get_param(param_file, mdl, "SCM_DIURNAL_SW_MAX",             &
-                 CS%Max_sw, "Maximum diurnal sw radiation "//         &
-                 "used in the SCM CVMix test surface forcing.",       &
+    call get_param(param_file, mdl, "SCM_DIURNAL_SW_MAX", CS%Max_sw, &
+                 "Maximum diurnal sw radiation used in the SCM CVMix test surface forcing.", &
                  units='m K/s', scale=US%m_to_Z*US%T_to_s, fail_if_missing=.true.)
   endif
   call get_param(param_file, mdl, "RHO_0", CS%Rho0, &

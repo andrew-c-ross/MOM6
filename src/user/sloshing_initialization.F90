@@ -14,7 +14,6 @@ use MOM_tracer_registry, only : tracer_registry_type
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
-use MOM_EOS, only : calculate_density, calculate_density_derivs, EOS_type
 
 implicit none ; private
 
@@ -53,35 +52,35 @@ end subroutine sloshing_initialize_topography
 !! same thickness but all interfaces (except bottom and sea surface) are
 !! displaced according to a half-period cosine, with maximum value on the
 !! left and minimum value on the right. This sets off a regular sloshing motion.
-subroutine sloshing_initialize_thickness ( h, G, GV, US, param_file, just_read_params)
+subroutine sloshing_initialize_thickness ( h, depth_tot, G, GV, US, param_file, just_read)
   type(ocean_grid_type),   intent(in)  :: G           !< The ocean's grid structure.
   type(verticalGrid_type), intent(in)  :: GV          !< The ocean's vertical grid structure.
   type(unit_scale_type),   intent(in)  :: US          !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                            intent(out) :: h           !< The thickness that is being initialized [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G)), &
+                           intent(in)  :: depth_tot   !< The nominal total depth of the ocean [Z ~> m]
   type(param_file_type),   intent(in)  :: param_file  !< A structure indicating the open file
                                                       !! to parse for model parameter values.
-  logical,       optional, intent(in)  :: just_read_params !< If present and true, this call will
+  logical,                 intent(in)  :: just_read !< If true, this call will
                                                       !! only read parameters without changing h.
 
-  real    :: displ(SZK_(G)+1)   ! The interface displacement in depth units.
-  real    :: z_unif(SZK_(G)+1)  ! Fractional uniform interface heights [nondim].
-  real    :: z_inter(SZK_(G)+1) ! Interface heights, in depth units.
-  real    :: a0                 ! The displacement amplitude in depth units.
+  real    :: displ(SZK_(GV)+1)  ! The interface displacement [Z ~> m].
+  real    :: z_unif(SZK_(GV)+1) ! Fractional uniform interface heights [nondim].
+  real    :: z_inter(SZK_(GV)+1) ! Interface heights [Z ~> m]
+  real    :: a0                 ! The displacement amplitude [Z ~> m].
   real    :: weight_z           ! A (misused?) depth-space weighting, in inconsistent units.
   real    :: x1, y1, x2, y2     ! Dimensonless parameters.
   real    :: x, t               ! Dimensionless depth coordinates?
   logical :: use_IC_bug         ! If true, set the initial conditions retaining an old bug.
-  logical :: just_read          ! If true, just read parameters but set nothing.
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl = "sloshing_initialization" !< This module's name.
 
-  integer :: i, j, k, is, ie, js, je, nx, nz
+  integer :: i, j, k, is, ie, js, je, nz
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
-  just_read = .false. ; if (present(just_read_params)) just_read = just_read_params
   if (.not.just_read) call log_version(param_file, mdl, version, "")
   call get_param(param_file, mdl, "SLOSHING_IC_AMPLITUDE", a0, &
                  "Initial amplitude of sloshing internal interface height "//&
@@ -152,7 +151,7 @@ subroutine sloshing_initialize_thickness ( h, G, GV, US, param_file, just_read_p
     enddo
 
     ! 3. The last interface must coincide with the seabed
-    z_inter(nz+1) = -G%bathyT(i,j)
+    z_inter(nz+1) = -depth_tot(i,j)
     ! Modify interface heights to make sure all thicknesses are strictly positive
     do k = nz,1,-1
       if ( z_inter(k) < (z_inter(k+1) + GV%Angstrom_Z) ) then
@@ -176,55 +175,51 @@ end subroutine sloshing_initialize_thickness
 !! reference surface layer salinity and temperature and a specified range.
 !! Note that the linear distribution is set up with respect to the layer
 !! number, not the physical position).
-subroutine sloshing_initialize_temperature_salinity ( T, S, h, G, GV, param_file, &
-                                                      eqn_of_state, just_read_params)
+subroutine sloshing_initialize_temperature_salinity ( T, S, h, G, GV, US, param_file, just_read)
   type(ocean_grid_type),                     intent(in)  :: G !< Ocean grid structure.
   type(verticalGrid_type),                   intent(in)  :: GV !< The ocean's vertical grid structure.
-  real, dimension(SZI_(G),SZJ_(G), SZK_(G)), intent(out) :: T !< Potential temperature [degC].
-  real, dimension(SZI_(G),SZJ_(G), SZK_(G)), intent(out) :: S !< Salinity [ppt].
-  real, dimension(SZI_(G),SZJ_(G), SZK_(G)), intent(in)  :: h !< Layer thickness [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: T !< Potential temperature [C ~> degC].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: S !< Salinity [S ~> ppt].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h !< Layer thickness [H ~> m or kg m-2].
+  type(unit_scale_type),                     intent(in)  :: US !< A dimensional unit scaling type
   type(param_file_type),                     intent(in)  :: param_file !< A structure indicating the
                                                             !! open file to parse for model
                                                             !! parameter values.
-  type(EOS_type),                            pointer     :: eqn_of_state !< Equation of state structure.
-  logical,       optional, intent(in)  :: just_read_params !< If present and true, this call will
-                                                      !! only read parameters without changing h.
+  logical,                                   intent(in)  :: just_read !< If true, this call will
+                                                      !! only read parameters without changing T & S.
 
   integer :: i, j, k, is, ie, js, je, nz
-  real    :: delta_S, delta_T
-  real    :: S_ref, T_ref;      ! Reference salinity and temerature within
+  real    :: delta_T
+  real    :: S_ref, T_ref;      ! Reference salinity  [S ~> ppt] and temperature [C ~> degC] within
                                 ! surface layer
-  real    :: S_range, T_range;  ! Range of salinities and temperatures over the
+  real    :: S_range, T_range;  ! Range of [S ~> ppt] and temperatures [C ~> degC] over the
                                 ! vertical
   integer :: kdelta
   real    :: deltah
   real    :: xi0, xi1
-  logical :: just_read    ! If true, just read parameters but set nothing.
   character(len=40)  :: mdl = "initialize_temp_salt_linear" ! This subroutine's
                                                             ! name.
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
-
-  just_read = .false. ; if (present(just_read_params)) just_read = just_read_params
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   call get_param(param_file, mdl, "S_REF", S_ref, 'Reference value for salinity', &
-                 default=35.0, units='1e-3', do_not_log=just_read)
+                 default=35.0, units='1e-3', scale=US%ppt_to_S, do_not_log=just_read)
   call get_param(param_file, mdl, "T_REF", T_ref, 'Reference value for temperature', &
-                 units='degC', fail_if_missing=.not.just_read, do_not_log=just_read)
+                 units='degC', scale=US%degC_to_C, fail_if_missing=.not.just_read, do_not_log=just_read)
 
   ! The default is to assume an increase by 2 ppt for the salinity and a uniform temperature.
   call get_param(param_file, mdl,"S_RANGE",S_range,'Initial salinity range.', &
-                 units='1e-3', default=2.0, do_not_log=just_read)
+                 units='1e-3', default=2.0, scale=US%ppt_to_S, do_not_log=just_read)
   call get_param(param_file, mdl,"T_RANGE",T_range,'Initial temperature range', &
-                 units='degC', default=0.0, do_not_log=just_read)
+                 units='degC', default=0.0, scale=US%degC_to_C, do_not_log=just_read)
 
   if (just_read) return ! All run-time parameters have been read, so return.
 
   ! Prescribe salinity
-  !delta_S = S_range / ( G%ke - 1.0 )
+  !delta_S = S_range / ( GV%ke - 1.0 )
 
   !S(:,:,1) = S_ref
-  !do k = 2,G%ke
+  !do k = 2,GV%ke
   !  S(:,:,k) = S(:,:,k-1) + delta_S
   !enddo
 
@@ -233,20 +228,20 @@ subroutine sloshing_initialize_temperature_salinity ( T, S, h, G, GV, param_file
     xi0 = 0.0
     do k = 1,nz
       xi1 = xi0 + deltah / G%max_depth ! =  xi0 + 1.0 / real(nz)
-      S(i,j,k) = 34.0 + 0.5 * S_range * (xi0 + xi1)
+      S(i,j,k) = 34.0*US%ppt_to_S + 0.5 * S_range * (xi0 + xi1)
       xi0 = xi1
     enddo
   enddo ; enddo
 
   ! Prescribe temperature
-  delta_T = T_range / ( G%ke - 1.0 )
+  delta_T = T_range / ( GV%ke - 1.0 )
 
   T(:,:,1) = T_ref
-  do k = 2,G%ke
+  do k = 2,GV%ke
     T(:,:,k) = T(:,:,k-1) + delta_T
   enddo
   kdelta = 2
-  T(:,:,G%ke/2 - (kdelta-1):G%ke/2 + kdelta) = 1.0
+  T(:,:,GV%ke/2 - (kdelta-1):GV%ke/2 + kdelta) = 1.0*US%degC_to_C
 
 end subroutine sloshing_initialize_temperature_salinity
 

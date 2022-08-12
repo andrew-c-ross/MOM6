@@ -95,35 +95,32 @@ subroutine dense_water_initialize_topography(D, G, param_file, max_depth)
 end subroutine dense_water_initialize_topography
 
 !> Initialize the temperature and salinity for the dense water experiment
-subroutine dense_water_initialize_TS(G, GV, param_file, eqn_of_state, T, S, h, just_read_params)
+subroutine dense_water_initialize_TS(G, GV, US, param_file, T, S, h, just_read)
   type(ocean_grid_type),                     intent(in)  :: G !< Horizontal grid control structure
   type(verticalGrid_type),                   intent(in)  :: GV !< Vertical grid control structure
+  type(unit_scale_type),                     intent(in)  :: US !< A dimensional unit scaling type
   type(param_file_type),                     intent(in)  :: param_file !< Parameter file structure
-  type(EOS_type),                            pointer     :: eqn_of_state !< EOS structure
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: T !< Output temperature [degC]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: S !< Output salinity [ppt]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: T !< Output temperature [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: S !< Output salinity [S ~> ppt]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h !< Layer thicknesses [H ~> m or kg m-2]
-  logical,       optional, intent(in)  :: just_read_params !< If present and true, this call will
-                                                      !! only read parameters without changing h.
+  logical,                                   intent(in)  :: just_read !< If true, this call will
+                                                      !! only read parameters without changing T & S.
   ! Local variables
   real :: mld, S_ref, S_range, T_ref
   real :: zi, zmid
-  logical :: just_read    ! If true, just read parameters but set nothing.
   integer :: i, j, k, nz
 
   nz = GV%ke
-
-  just_read = .false. ; if (present(just_read_params)) just_read = just_read_params
 
   call get_param(param_file, mdl, "DENSE_WATER_MLD", mld, &
        "Depth of unstratified mixed layer as a fraction of the water column.", &
        units="nondim", default=default_mld, do_not_log=just_read)
   call get_param(param_file, mdl, "S_REF", S_ref, 'Reference salinity', &
-                 default=35.0, units='1e-3', do_not_log=just_read)
-  call get_param(param_file, mdl,"T_REF", T_ref, 'Reference temperature', units='degC', &
-                fail_if_missing=.not.just_read, do_not_log=just_read)
+                 default=35.0, units='1e-3', scale=US%ppt_to_S, do_not_log=just_read)
+  call get_param(param_file, mdl,"T_REF", T_ref, 'Reference temperature', &
+                units='degC', scale=US%degC_to_C, fail_if_missing=.not.just_read, do_not_log=just_read)
   call get_param(param_file, mdl,"S_RANGE", S_range, 'Initial salinity range', &
-                units='1e-3', default=2.0, do_not_log=just_read)
+                units='1e-3', default=2.0, scale=US%ppt_to_S, do_not_log=just_read)
 
   if (just_read) return ! All run-time parameters have been read, so return.
 
@@ -152,11 +149,13 @@ subroutine dense_water_initialize_TS(G, GV, param_file, eqn_of_state, T, S, h, j
 end subroutine dense_water_initialize_TS
 
 !> Initialize the restoring sponges for the dense water experiment
-subroutine dense_water_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CSp, ACSp)
+subroutine dense_water_initialize_sponges(G, GV, US, tv, depth_tot, param_file, use_ALE, CSp, ACSp)
   type(ocean_grid_type),   intent(in) :: G !< Horizontal grid control structure
   type(verticalGrid_type), intent(in) :: GV !< Vertical grid control structure
   type(unit_scale_type),   intent(in) :: US !< A dimensional unit scaling type
   type(thermo_var_ptrs),   intent(in) :: tv !< Thermodynamic variables
+  real, dimension(SZI_(G),SZJ_(G)), &
+                           intent(in) :: depth_tot  !< The nominal total depth of the ocean [Z ~> m]
   type(param_file_type),   intent(in) :: param_file !< Parameter file structure
   logical,                 intent(in) :: use_ALE !< ALE flag
   type(sponge_CS),         pointer    :: CSp !< Layered sponge control structure pointer
@@ -167,8 +166,8 @@ subroutine dense_water_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CS
 
   real, dimension(SZI_(G),SZJ_(G)) :: Idamp ! inverse damping timescale [T-1 ~> s-1]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: h  ! sponge thicknesses [H ~> m or kg m-2]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: T  ! sponge temperature [degC]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: S  ! sponge salinity [ppt]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: T  ! sponge temperature [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: S  ! sponge salinity [S ~> ppt]
   real, dimension(SZK_(GV)+1) :: e0, eta1D ! interface positions for ALE sponge [Z ~> m]
 
   integer :: i, j, k, nz
@@ -197,9 +196,9 @@ subroutine dense_water_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CS
   call get_param(param_file, mdl, "DENSE_WATER_MLD", mld, default=default_mld, do_not_log=.true.)
   call get_param(param_file, mdl, "DENSE_WATER_SILL_HEIGHT", sill_height, default=default_sill, do_not_log=.true.)
 
-  call get_param(param_file, mdl, "S_REF", S_ref, default=35.0, do_not_log=.true.)
-  call get_param(param_file, mdl, "S_RANGE", S_range, do_not_log=.true.)
-  call get_param(param_file, mdl, "T_REF", T_ref, do_not_log=.true.)
+  call get_param(param_file, mdl, "S_REF", S_ref, default=35.0, scale=US%ppt_to_S, do_not_log=.true.)
+  call get_param(param_file, mdl, "S_RANGE", S_range, scale=US%ppt_to_S, do_not_log=.true.)
+  call get_param(param_file, mdl, "T_REF", T_ref, scale=US%degC_to_C, do_not_log=.true.)
 
   ! no active sponges
   if (west_sponge_time_scale <= 0. .and. east_sponge_time_scale <= 0.) return
@@ -234,7 +233,7 @@ subroutine dense_water_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CS
 
     do j = G%jsc,G%jec
       do i = G%isc,G%iec
-        eta1D(nz+1) = -G%bathyT(i,j)
+        eta1D(nz+1) = -depth_tot(i,j)
         do k = nz,1,-1
           eta1D(k) = e0(k)
 
@@ -249,7 +248,7 @@ subroutine dense_water_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CS
       enddo
     enddo
 
-    call initialize_ALE_sponge(Idamp, G, param_file, ACSp, h, nz)
+    call initialize_ALE_sponge(Idamp, G, GV, param_file, ACSp, h, nz)
 
     ! construct temperature and salinity for the sponge
     ! start with initial condition
@@ -278,8 +277,8 @@ subroutine dense_water_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CS
       enddo
     enddo
 
-    if (associated(tv%T)) call set_up_ALE_sponge_field(T, G, tv%T, ACSp)
-    if (associated(tv%S)) call set_up_ALE_sponge_field(S, G, tv%S, ACSp)
+    if (associated(tv%T)) call set_up_ALE_sponge_field(T, G, GV, tv%T, ACSp)
+    if (associated(tv%S)) call set_up_ALE_sponge_field(S, G, GV, tv%S, ACSp)
   else
     call MOM_error(FATAL, "dense_water_initialize_sponges: trying to use non ALE sponge")
   endif

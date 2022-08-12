@@ -10,7 +10,6 @@ use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
 use MOM_file_parser, only : get_param, param_file_type, log_version
 use MOM_forcing_type, only : forcing, allocate_forcing_type
 use MOM_grid, only : ocean_grid_type
-use MOM_io, only : file_exists, read_data
 use MOM_safe_alloc, only : safe_alloc_ptr
 use MOM_time_manager, only : time_type, operator(+), operator(/)
 use MOM_tracer_flow_control, only : call_tracer_set_forcing
@@ -30,8 +29,6 @@ type, public :: BFB_surface_forcing_CS ; private
   real :: Rho0               !< The density used in the Boussinesq approximation [R ~> kg m-3].
   real :: G_Earth            !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2]
   real :: Flux_const         !< The restoring rate at the surface [Z T-1 ~> m s-1].
-  real :: gust_const         !< A constant unresolved background gustiness
-                             !! that contributes to ustar [Pa].
   real :: SST_s              !< SST at the southern edge of the linear forcing ramp [degC]
   real :: SST_n              !< SST at the northern edge of the linear forcing ramp [degC]
   real :: lfrslat            !< Southern latitude where the linear forcing ramp begins [degLat]
@@ -55,7 +52,7 @@ subroutine BFB_buoyancy_forcing(sfc_state, fluxes, day, dt, G, US, CS)
                                                       !! have NULL ptrs.
   type(time_type),              intent(in)    :: day  !< Time of the fluxes.
   real,                         intent(in)    :: dt   !< The amount of time over which
-                                                      !! the fluxes apply [s]
+                                                      !! the fluxes apply [T ~> s]
   type(ocean_grid_type),        intent(in)    :: G    !< The ocean's grid structure
   type(unit_scale_type),        intent(in)    :: US   !< A dimensional unit scaling type
   type(BFB_surface_forcing_CS), pointer       :: CS   !< A pointer to the control structure
@@ -180,8 +177,9 @@ subroutine BFB_surface_forcing_init(Time, G, US, param_file, diag, CS)
   type(diag_ctrl), target,      intent(in) :: diag !< A structure that is used to
                                                    !! regulate diagnostic output.
   type(BFB_surface_forcing_CS), pointer    :: CS   !< A pointer to the control structure for this module
-! This include declares and sets the variable "version".
-#include "version_variable.h"
+
+  ! This include declares and sets the variable "version".
+# include "version_variable.h"
   character(len=40)  :: mdl = "BFB_surface_forcing" ! This module's name.
 
   if (associated(CS)) then
@@ -221,13 +219,11 @@ subroutine BFB_surface_forcing_init(Time, G, US, param_file, diag, CS)
   call get_param(param_file, mdl, "DRHO_DT", CS%drho_dt, &
                  "The rate of change of density with temperature.", &
                  units="kg m-3 K-1", default=-0.2, scale=US%kg_m3_to_R)
-  call get_param(param_file, mdl, "GUST_CONST", CS%gust_const, &
-                 "The background gustiness in the winds.", units="Pa", default=0.0)
 
   call get_param(param_file, mdl, "RESTOREBUOY", CS%restorebuoy, &
                  "If true, the buoyancy fluxes drive the model back "//&
                  "toward some specified surface state with a rate "//&
-                 "given by FLUXCONST.", default= .false.)
+                 "given by FLUXCONST.", default=.false.)
   if (CS%restorebuoy) then
     call get_param(param_file, mdl, "FLUXCONST", CS%Flux_const, &
                  "The constant that relates the restoring surface fluxes to the relative "//&

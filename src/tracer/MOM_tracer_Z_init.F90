@@ -6,17 +6,17 @@ module MOM_tracer_Z_init
 use MOM_error_handler, only : MOM_error, FATAL, WARNING, MOM_mesg, is_root_pe
 ! use MOM_file_parser, only : get_param, log_version, param_file_type
 use MOM_grid, only : ocean_grid_type
-use MOM_io, only : MOM_read_data
+use MOM_io, only : MOM_read_data, get_var_sizes, read_attribute, read_variable
+use MOM_io, only : open_file_to_read, close_file_to_read
 use MOM_EOS, only : EOS_type, calculate_density, calculate_density_derivs, EOS_domain
 use MOM_unit_scaling, only : unit_scale_type
-
-use netcdf
+use MOM_verticalGrid, only : verticalGrid_type
 
 implicit none ; private
 
 #include <MOM_memory.h>
 
-public tracer_Z_init, tracer_Z_init_array, find_interfaces, determine_temperature
+public tracer_Z_init, tracer_Z_init_array, determine_temperature
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -27,28 +27,22 @@ contains
 
 !>   This function initializes a tracer by reading a Z-space file, returning
 !! .true. if this appears to have been successful, and false otherwise.
-function tracer_Z_init(tr, h, filename, tr_name, G, US, missing_val, land_val)
+function tracer_Z_init(tr, h, filename, tr_name, G, GV, US, missing_val, land_val)
   logical :: tracer_Z_init !< A return code indicating if the initialization has been successful
   type(ocean_grid_type), intent(in)    :: G    !< The ocean's grid structure
+  type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure.
   type(unit_scale_type), intent(in)    :: US   !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                          intent(out)   :: tr   !< The tracer to initialize
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                          intent(in)    :: h    !< Layer thicknesses [H ~> m or kg m-2]
   character(len=*),      intent(in)    :: filename !< The name of the file to read from
   character(len=*),      intent(in)    :: tr_name !< The name of the tracer in the file
-! type(param_file_type), intent(in)    :: param_file !< A structure to parse for run-time parameters
   real,        optional, intent(in)    :: missing_val !< The missing value for the tracer
   real,        optional, intent(in)    :: land_val !< A value to use to fill in land points
 
-  !   This function initializes a tracer by reading a Z-space file, returning true if this
-  ! appears to have been successful, and false otherwise.
-!
-  integer, save :: init_calls = 0
 ! This include declares and sets the variable "version".
-#include "version_variable.h"
-  character(len=40)  :: mdl = "MOM_tracer_Z_init" ! This module's name.
-  character(len=256) :: mesg    ! Message for error messages.
+# include "version_variable.h"
 
   real, allocatable, dimension(:,:,:) :: &
     tr_in   ! The z-space array of tracer concentrations that is read in.
@@ -62,7 +56,7 @@ function tracer_Z_init(tr, h, filename, tr_name, G, US, missing_val, land_val)
     z2      ! of a z-cell that contributes to a layer, relative to the cell
             ! center and normalized by the cell thickness, nondim.
             ! Note that -1/2 <= z1 <= z2 <= 1/2.
-  real    :: e(SZK_(G)+1)  ! The z-star interface heights [Z ~> m].
+  real    :: e(SZK_(GV)+1)  ! The z-star interface heights [Z ~> m].
   real    :: landval    ! The tracer value to use in land points.
   real    :: sl_tr      ! The normalized slope of the tracer
                         ! within the cell, in tracer units.
@@ -75,7 +69,7 @@ function tracer_Z_init(tr, h, filename, tr_name, G, US, missing_val, land_val)
   character(len=80) :: loc_msg
   integer :: k_top, k_bot, k_bot_prev, k_start
   integer :: i, j, k, kz, is, ie, js, je, nz, nz_in
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   landval = 0.0 ; if (present(land_val)) landval = land_val
 
@@ -95,8 +89,8 @@ function tracer_Z_init(tr, h, filename, tr_name, G, US, missing_val, land_val)
     return
   endif
 
-  allocate(tr_in(G%isd:G%ied,G%jsd:G%jed,nz_in)) ; tr_in(:,:,:) = 0.0
-  allocate(tr_1d(nz_in)) ; tr_1d(:) = 0.0
+  allocate(tr_in(G%isd:G%ied,G%jsd:G%jed,nz_in), source=0.0)
+  allocate(tr_1d(nz_in), source=0.0)
   call MOM_read_data(filename, tr_name, tr_in(:,:,:), G%Domain)
 
   ! Fill missing values from above?  Use a "close" test to avoid problems
@@ -136,8 +130,8 @@ function tracer_Z_init(tr, h, filename, tr_name, G, US, missing_val, land_val)
 
       do i=is,ie ; if (G%mask2dT(i,j)*htot(i) > 0.0) then
         ! Determine the z* heights of the model interfaces.
-        dilate = (G%bathyT(i,j) - 0.0) / htot(i)
-        e(nz+1) = -G%bathyT(i,j)
+        dilate = (G%bathyT(i,j) + G%Z_ref) / htot(i)
+        e(nz+1) = -G%bathyT(i,j) - G%Z_ref
         do k=nz,1,-1 ; e(K) = e(K+1) + dilate * h(i,j,k) ; enddo
 
         ! Create a single-column copy of tr_in.  Efficiency is not an issue here.
@@ -211,8 +205,8 @@ function tracer_Z_init(tr, h, filename, tr_name, G, US, missing_val, land_val)
 
       do i=is,ie ; if (G%mask2dT(i,j)*htot(i) > 0.0) then
         ! Determine the z* heights of the model interfaces.
-        dilate = (G%bathyT(i,j) - 0.0) / htot(i)
-        e(nz+1) = -G%bathyT(i,j)
+        dilate = (G%bathyT(i,j) + G%Z_ref) / htot(i)
+        e(nz+1) = -G%bathyT(i,j) - G%Z_ref
         do k=nz,1,-1 ; e(K) = e(K+1) + dilate * h(i,j,k) ; enddo
 
         ! Create a single-column copy of tr_in.  Efficiency is not an issue here.
@@ -278,37 +272,42 @@ end function tracer_Z_init
 !> Layer model routine for remapping tracers from pseudo-z coordinates into layers defined
 !! by target interface positions.
 subroutine tracer_z_init_array(tr_in, z_edges, nk_data, e, land_fill, G, nlay, nlevs, &
-                               eps_z, tr)
+                               eps_z, tr, scale)
   type(ocean_grid_type),      intent(in)  :: G     !< The ocean's grid structure
   integer,                    intent(in)  :: nk_data !< The number of levels in the input data
   real, dimension(SZI_(G),SZJ_(G),nk_data), &
-                              intent(in)  :: tr_in !< The z-space array of tracer concentrations that is read in.
+                              intent(in)  :: tr_in !< The z-space array of tracer concentrations
+                                                   !! that is read in [A]
   real, dimension(nk_data+1), intent(in)  :: z_edges !< The depths of the cell edges in the input z* data
-                                                          !! [Z ~> m or m]
-  integer,                    intent(in)  :: nlay !< The number of vertical layers in the target grid
+                                                   !! [Z ~> m or m]
+  integer,                    intent(in)  :: nlay  !< The number of vertical layers in the target grid
   real, dimension(SZI_(G),SZJ_(G),nlay+1), &
-                              intent(in)  :: e !< The depths of the target layer interfaces [Z ~> m or m]
-  real,                       intent(in)  :: land_fill !< fill in data over land (1)
+                              intent(in)  :: e     !< The depths of the target layer interfaces [Z ~> m] or [m]
+  real,                       intent(in)  :: land_fill !< fill in data over land [B]
   integer, dimension(SZI_(G),SZJ_(G)), &
                               intent(in)  :: nlevs !< The number of input levels with valid data
   real,                       intent(in)  :: eps_z !< A negligibly thin layer thickness [Z ~> m].
   real, dimension(SZI_(G),SZJ_(G),nlay), &
-                              intent(out) :: tr !< tracers in layer space
+                              intent(out) :: tr    !< tracers in model space [B]
+  real,             optional, intent(in)  :: scale !< A factor by which to scale the output tracers from the
+                                                   !! input tracers [B A-1 ~> 1]
 
   ! Local variables
-  real, dimension(nk_data) :: tr_1d !< a copy of the input tracer concentrations in a column.
-  real, dimension(nlay+1)  :: e_1d  ! A 1-d column of intreface heights, in the same units as e.
-  real, dimension(nlay)    :: tr_   ! A 1-d column of output tracer concentrations
+  real :: tr_1d(nk_data) ! A copy of the input tracer concentrations in a column [B]
+  real :: e_1d(nlay+1)   ! A 1-d column of interface heights, in the same units as e [Z ~> m] or [m]
+  real :: sl_tr          ! The tracer concentration slope times the layer thickness, in tracer units [B]
+  real :: wt(nk_data)    ! The fractional weight for each layer in the range between z1 and z2 [nondim]
+  real :: z1(nk_data)    ! z1 and z2 are the fractional depths of the top and bottom
+  real :: z2(nk_data)    ! limits of the part of a z-cell that contributes to a layer, relative
+                         ! to the cell center and normalized by the cell thickness [nondim].
+                         ! Note that -1/2 <= z1 <= z2 <= 1/2.
+  real :: scale_fac      ! A factor by which to scale the output tracers from the input tracers [B A-1 ~> 1]
   integer :: k_top, k_bot, k_bot_prev, kstart
-  real    :: sl_tr    ! The tracer concentration slope times the layer thickness, in tracer units.
-  real, dimension(nk_data) :: wt !< The fractional weight for each layer in the range between z1 and z2
-  real, dimension(nk_data) :: z1, z2 ! z1 and z2 are the fractional depths of the top and bottom
-                                  ! limits of the part of a z-cell that contributes to a layer, relative
-                                  ! to the cell center and normalized by the cell thickness [nondim].
-                                  ! Note that -1/2 <= z1 <= z2 <= 1/2.
   integer :: i, j, k, kz, is, ie, js, je
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
+
+  scale_fac = 1.0 ; if (present(scale)) then ; scale_fac = scale ; endif
 
   do j=js,je
     i_loop: do i=is,ie
@@ -318,7 +317,7 @@ subroutine tracer_z_init_array(tr_in, z_edges, nk_data, e, land_fill, G, nlay, n
       endif
 
       do k=1,nk_data
-        tr_1d(k) = tr_in(i,j,k)
+        tr_1d(k) = scale_fac*tr_in(i,j,k)
       enddo
 
       do k=1,nlay+1
@@ -397,98 +396,46 @@ subroutine read_Z_edges(filename, tr_name, z_edges, nz_out, has_edges, &
   !   This subroutine reads the vertical coordinate data for a field from a
   ! NetCDF file.  It also might read the missing value attribute for that same field.
   character(len=32) :: mdl
-  character(len=120) :: dim_name, edge_name, tr_msg, dim_msg
+  character(len=120) :: tr_msg, dim_msg
+  character(:), allocatable :: edge_name
+  character(len=256) :: dim_names(4)
   logical :: monotonic
-  integer :: ncid, status, intid, tr_id, layid, k
-  integer :: nz_edge, ndim, tr_dim_ids(NF90_MAX_VAR_DIMS)
+  integer :: ncid, k
+  integer :: nz_edge, ndim, sizes(4)
 
   mdl = "MOM_tracer_Z_init read_Z_edges: "
   tr_msg = trim(tr_name)//" in "//trim(filename)
 
-  status = NF90_OPEN(filename, NF90_NOWRITE, ncid)
-  if (status /= NF90_NOERR) then
-    call MOM_error(WARNING,mdl//" Difficulties opening "//trim(filename)//&
-        " - "//trim(NF90_STRERROR(status)))
-    nz_out = -1 ; return
+  if (is_root_PE()) then
+    call open_file_to_read(filename, ncid)
+  else
+    ncid = -1
   endif
 
-  status = NF90_INQ_VARID(ncid, tr_name, tr_id)
-  if (status /= NF90_NOERR) then
-    call MOM_error(WARNING,mdl//" Difficulties finding variable "//&
-        trim(tr_msg)//" - "//trim(NF90_STRERROR(status)))
-    nz_out = -1 ; status = NF90_CLOSE(ncid) ; return
-  endif
-  status = NF90_INQUIRE_VARIABLE(ncid, tr_id, ndims=ndim, dimids=tr_dim_ids)
-  if (status /= NF90_NOERR) then
-    call MOM_ERROR(WARNING,mdl//" cannot inquire about "//trim(tr_msg))
-  elseif ((ndim < 3) .or. (ndim > 4)) then
-    call MOM_ERROR(WARNING,mdl//" "//trim(tr_msg)//&
-         " has too many or too few dimensions.")
-    nz_out = -1 ; status = NF90_CLOSE(ncid) ; return
-  endif
+  call get_var_sizes(filename, tr_name, ndim, sizes, dim_names=dim_names, ncid_in=ncid)
+  if ((ndim < 3) .or. (ndim > 4)) &
+    call MOM_ERROR(FATAL, mdl//" "//trim(tr_msg)//" has too many or too few dimensions.")
+  nz_out = sizes(3)
 
-  if (.not.use_missing) then
-    ! Try to find the missing value from the dataset.
-    status = NF90_GET_ATT(ncid, tr_id, "missing_value", missing)
-    if (status /= NF90_NOERR) use_missing = .true.
-  endif
-
-  ! Get the axis name and length.
-  status = NF90_INQUIRE_DIMENSION(ncid, tr_dim_ids(3), dim_name, len=nz_out)
-  if (status /= NF90_NOERR) then
-    call MOM_ERROR(WARNING,mdl//" cannot inquire about dimension(3) of "//&
-                    trim(tr_msg))
-  endif
-
-  dim_msg = trim(dim_name)//" in "//trim(filename)
-  status = NF90_INQ_VARID(ncid, dim_name, layid)
-  if (status /= NF90_NOERR) then
-    call MOM_error(WARNING,mdl//" Difficulties finding variable "//&
-        trim(dim_msg)//" - "//trim(NF90_STRERROR(status)))
-    nz_out = -1 ; status = NF90_CLOSE(ncid) ; return
+  if (.not.use_missing) then  ! Try to find the missing value from the dataset.
+    call read_attribute(filename, "missing_value", missing, varname=tr_name, found=use_missing, ncid_in=ncid)
   endif
   ! Find out if the Z-axis has an edges attribute
-  status = NF90_GET_ATT(ncid, layid, "edges", edge_name)
-  if (status /= NF90_NOERR) then
-    call MOM_mesg(mdl//" "//trim(dim_msg)//&
-         " has no readable edges attribute - "//trim(NF90_STRERROR(status)))
-    has_edges = .false.
-  else
-    has_edges = .true.
-    status = NF90_INQ_VARID(ncid, edge_name, intid)
-    if (status /= NF90_NOERR) then
-      call MOM_error(WARNING,mdl//" Difficulties finding edge variable "//&
-          trim(edge_name)//" in "//trim(filename)//" - "//trim(NF90_STRERROR(status)))
-      has_edges = .false.
-    endif
-  endif
+  call read_attribute(filename, "edges", edge_name, varname=dim_names(3), found=has_edges, ncid_in=ncid)
 
-  nz_edge = nz_out ; if (has_edges) nz_edge = nz_out+1
-  allocate(z_edges(nz_edge)) ; z_edges(:) = 0.0
+  nz_edge = sizes(3) ; if (has_edges) nz_edge = sizes(3)+1
+  allocate(z_edges(nz_edge), source=0.0)
 
   if (nz_out < 1) return
 
   ! Read the right variable.
   if (has_edges) then
-    dim_msg = trim(edge_name)//" in "//trim(filename)
-    status = NF90_GET_VAR(ncid, intid, z_edges)
-    if (status /= NF90_NOERR) then
-      call MOM_error(WARNING,mdl//" Difficulties reading variable "//&
-          trim(dim_msg)//" - "//trim(NF90_STRERROR(status)))
-      nz_out = -1 ; status = NF90_CLOSE(ncid) ; return
-    endif
+    call read_variable(filename, edge_name, z_edges, ncid)
   else
-    status = NF90_GET_VAR(ncid, layid, z_edges)
-    if (status /= NF90_NOERR) then
-      call MOM_error(WARNING,mdl//" Difficulties reading variable "//&
-          trim(dim_msg)//" - "//trim(NF90_STRERROR(status)))
-      nz_out = -1 ; status = NF90_CLOSE(ncid) ; return
-    endif
+    call read_variable(filename, dim_names(3), z_edges, ncid)
   endif
-
-  status = NF90_CLOSE(ncid)
-  if (status /= NF90_NOERR) call MOM_error(WARNING, mdl// &
-    " Difficulties closing "//trim(filename)//" - "//trim(NF90_STRERROR(status)))
+  call close_file_to_read(ncid, filename)
+  if (allocated(edge_name)) deallocate(edge_name)
 
   ! z_edges should be montonically decreasing with our sign convention.
   ! Change the sign sign convention if it looks like z_edges is increasing.
@@ -498,8 +445,7 @@ subroutine read_Z_edges(filename, tr_name, z_edges, nz_out, has_edges, &
   ! Check that z_edges is now monotonically decreasing.
   monotonic = .true.
   do k=2,nz_edge ; if (z_edges(k) >= z_edges(k-1)) monotonic = .false. ; enddo
-  if (.not.monotonic) &
-    call MOM_error(WARNING,mdl//" "//trim(dim_msg)//" is not monotonic.")
+  if (.not.monotonic) call MOM_error(WARNING,mdl//" "//trim(dim_msg)//" is not monotonic.")
 
   if (scale /= 1.0) then ; do k=1,nz_edge ; z_edges(k) = scale*z_edges(k) ; enddo ; endif
 
@@ -608,185 +554,69 @@ function find_limited_slope(val, e, k) result(slope)
 
 end function find_limited_slope
 
-!> Find interface positions corresponding to density profile
-subroutine find_interfaces(rho, zin, nk_data, Rb, depth, zi, G, US, nlevs, nkml, hml, debug, &
-                           eps_z, eps_rho)
-  type(ocean_grid_type),      intent(in) :: G     !< The ocean's grid structure
-  integer,                    intent(in) :: nk_data !< The number of levels in the input data
-  real, dimension(SZI_(G),SZJ_(G),nk_data), &
-                              intent(in) :: rho   !< Potential density in z-space [R ~> kg m-3]
-  real, dimension(nk_data),   intent(in) :: zin   !< Input data levels [Z ~> m].
-  real, dimension(SZK_(G)+1), intent(in) :: Rb    !< target interface densities [R ~> kg m-3]
-  real, dimension(SZI_(G),SZJ_(G)), &
-                              intent(in) :: depth !< ocean depth [Z ~> m].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)+1), &
-                             intent(out) :: zi    !< The returned interface heights [Z ~> m]
-  type(unit_scale_type),      intent(in) :: US    !< A dimensional unit scaling type
-  integer, dimension(SZI_(G),SZJ_(G)), &
-                    optional, intent(in) :: nlevs !< number of valid points in each column
-  logical,          optional, intent(in) :: debug !< optional debug flag
-  integer,          optional, intent(in) :: nkml  !< number of mixed layer pieces to distribute over
-                                                  !! a depth of hml.
-  real,             optional, intent(in) :: hml   !< mixed layer depth [Z ~> m].
-  real,             optional, intent(in) :: eps_z !< A negligibly small layer thickness [Z ~> m].
-  real,             optional, intent(in) :: eps_rho !< A negligibly small density difference [R ~> kg m-3].
-
-  ! Local variables
-  real, dimension(SZI_(G),nk_data) :: rho_ ! A slice of densities [R ~> kg m-3]
-  logical :: unstable
-  integer :: dir
-  integer, dimension(SZI_(G),SZK_(G)+1) :: ki_
-  real, dimension(SZI_(G),SZK_(G)+1) :: zi_ ! A slice of interface heights (negative downward) [Z ~> m].
-  integer, dimension(SZI_(G),SZJ_(G)) :: nlevs_data
-  integer, dimension(SZI_(G)) :: lo, hi
-  real :: slope         ! The rate of change of height with density [Z R-1 ~> m4 kg-1]
-  real :: drhodz        ! A local vertical density gradient [R Z-1 ~> kg m-4]
-  real :: hml_          ! The depth of the mixed layer to use for the topmost nkml_ layers [Z ~> m].
-  real    :: epsln_Z    ! A negligibly thin layer thickness [m or Z ~> m].
-  real    :: epsln_rho  ! A negligibly small density change [R ~> kg m-3].
-  real, parameter :: zoff=0.999
-  integer :: nkml_
-  logical :: debug_ = .false.
-  integer :: i, j, k, m, n, is, ie, js, je, nz
-
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
-
-  zi(:,:,:) = 0.0
-
-  if (PRESENT(debug)) debug_=debug
-
-  nlevs_data(:,:) = nz
-
-  nkml_ = 0 ;  if (PRESENT(nkml)) nkml_ = max(0, nkml)
-  hml_ = 0.0 ; if (PRESENT(hml)) hml_ = hml
-  epsln_Z = 1.0e-10*US%m_to_Z ; if (PRESENT(eps_z)) epsln_Z = eps_z
-  epsln_rho = 1.0e-10*US%kg_m3_to_R ; if (PRESENT(eps_rho)) epsln_rho = eps_rho
-
-  if (PRESENT(nlevs)) then
-    nlevs_data(:,:) = nlevs(:,:)
-  endif
-
-  do j=js,je
-    rho_(:,:) = rho(:,j,:)
-    i_loop: do i=is,ie
-      if (debug_) then
-        print *,'looking for interfaces, i,j,nlevs= ',i,j,nlevs_data(i,j)
-        print *,'initial density profile= ', rho_(i,:)
-      endif
-      unstable=.true.
-      dir=1
-      do while (unstable)
-        unstable=.false.
-        if (dir == 1) then
-          do k=2,nlevs_data(i,j)-1
-            if (rho_(i,k) - rho_(i,k-1) < 0.0 ) then
-              if (k == 2) then
-                rho_(i,k-1) = rho_(i,k)-epsln_rho
-              else
-                drhodz = (rho_(i,k+1)-rho_(i,k-1)) / (zin(k+1)-zin(k-1))
-                if (drhodz < 0.0) unstable=.true.
-                rho_(i,k) = rho_(i,k-1) + drhodz*zoff*(zin(k)-zin(k-1))
-              endif
-            endif
-          enddo
-          dir = -1*dir
-        else
-          do k=nlevs_data(i,j)-1,2,-1
-            if (rho_(i,k+1) - rho_(i,k) < 0.0) then
-              if (k == nlevs_data(i,j)-1) then
-                rho_(i,k+1) = rho_(i,k-1)+epsln_rho
-              else
-                drhodz = (rho_(i,k+1)-rho_(i,k-1))/(zin(k+1)-zin(k-1))
-                if (drhodz  < 0.0) unstable=.true.
-                rho_(i,k) = rho_(i,k+1)-drhodz*(zin(k+1)-zin(k))
-              endif
-            endif
-          enddo
-          dir = -1*dir
-        endif
-      enddo
-      if (debug_) then
-        print *,'final density profile= ', rho_(i,:)
-      endif
-    enddo i_loop
-
-    ki_(:,:) = 0
-    zi_(:,:) = 0.0
-    lo(:) = 1
-    hi(:) = nlevs_data(:,j)
-    ki_ = bisect_fast(rho_, Rb, lo, hi)
-    ki_(:,:) = max(1, ki_(:,:)-1)
-    do i=is,ie
-      do m=2,nz
-        slope = (zin(ki_(i,m)+1) - zin(ki_(i,m))) / max(rho_(i,ki_(i,m)+1) - rho_(i,ki_(i,m)),epsln_rho)
-        zi_(i,m) = -1.0*(zin(ki_(i,m)) + slope*(Rb(m)-rho_(i,ki_(i,m))))
-        zi_(i,m) = max(zi_(i,m), -depth(i,j))
-        zi_(i,m) = min(zi_(i,m), -1.0*hml_)
-      enddo
-      zi_(i,nz+1) = -depth(i,j)
-      do m=2,nkml_+1
-        zi_(i,m) = max(hml_*((1.0-real(m))/real(nkml_)), -depth(i,j))
-      enddo
-      do m=nz,nkml_+2,-1
-        if (zi_(i,m) < zi_(i,m+1) + epsln_Z) zi_(i,m) = zi_(i,m+1) + epsln_Z
-        if (zi_(i,m) > -1.0*hml_)  zi_(i,m) = max(-1.0*hml_, -depth(i,j))
-      enddo
-    enddo
-    zi(:,j,:) = zi_(:,:)
-  enddo
-
-end subroutine find_interfaces
-
 !> This subroutine determines the potential temperature and salinity that
 !! is consistent with the target density using provided initial guess
-subroutine determine_temperature(temp, salt, R_tgt, p_ref, niter, land_fill, h, k_start, G, US, eos, h_massless)
+subroutine determine_temperature(temp, salt, R_tgt, p_ref, niter, h, k_start, G, GV, US, &
+                                 EOS, h_massless)
   type(ocean_grid_type),         intent(in)    :: G    !< The ocean's grid structure
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
-                                 intent(inout) :: temp !< potential temperature [degC]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
-                                 intent(inout) :: salt !< salinity [PSU]
-  real, dimension(SZK_(G)),      intent(in)    :: R_tgt !< desired potential density [R ~> kg m-3].
+  type(verticalGrid_type),       intent(in)    :: GV   !< The ocean's vertical grid structure.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                                 intent(inout) :: temp !< potential temperature [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                                 intent(inout) :: salt !< salinity [S ~> ppt]
+  real, dimension(SZK_(GV)),     intent(in)    :: R_tgt !< desired potential density [R ~> kg m-3].
   real,                          intent(in)    :: p_ref !< reference pressure [R L2 T-2 ~> Pa].
   integer,                       intent(in)    :: niter !< maximum number of iterations
   integer,                       intent(in)    :: k_start !< starting index (i.e. below the buffer layer)
-  real,                          intent(in)    :: land_fill !< land fill value
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                                  intent(in)    :: h   !< layer thickness, used only to avoid working on
                                                       !! massless layers [H ~> m or kg m-2]
   type(unit_scale_type),         intent(in)    :: US  !< A dimensional unit scaling type
-  type(eos_type),                pointer       :: eos !< seawater equation of state control structure
+  type(EOS_type),                intent(in)    :: EOS !< seawater equation of state control structure
   real,                optional, intent(in)    :: h_massless !< A threshold below which a layer is
                                                       !! determined to be massless [H ~> m or kg m-2]
 
-  real, parameter :: T_max = 31.0, T_min = -2.0
   ! Local variables (All of which need documentation!)
-  real, dimension(SZI_(G),SZK_(G)) :: &
-    T, S, dT, dS, &
-    rho, & ! Layer densities [R ~> kg m-3]
-    hin, & ! Input layer thicknesses [H ~> m or kg m-2]
-    drho_dT, & ! Partial derivative of density with temperature [R degC-1 ~> kg m-3 degC-1]
-    drho_dS    ! Partial derivative of density with salinity [R ppt-1 ~> kg m-3 ppt-1]
+  real, dimension(SZI_(G),SZK_(GV)) :: &
+    T, &   ! A 2-d working copy of the layer temperatures [C ~> degC]
+    S, &   ! A 2-d working copy of the layer salinities [S ~> ppt]
+    dT, &  ! An estimated change in temperature before bounding [C ~> degC]
+    dS, &  ! An estimated change in salinity before bounding [S ~> ppt]
+    rho, & ! Layer densities with the current estimate of temperature and salinity [R ~> kg m-3]
+    hin, & ! A 2D copy of the layer thicknesses [H ~> m or kg m-2]
+    drho_dT, & ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
+    drho_dS    ! Partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1]
   real, dimension(SZI_(G)) :: press ! Reference pressures [R L2 T-2 ~> Pa]
-  real    :: dT_dS_gauge  ! The relative penalizing of temperature to salinity changes when
-                          ! minimizing property changes while correcting density [degC ppt-1].
-  real    :: I_denom      ! The inverse of the magnitude squared of the density gradient in
-                          ! T-S space streched with dT_dS_gauge [ppt2 R-2 ~> ppt2 m6 kg-2]
+  real :: dT_dS_gauge   ! The relative penalizing of temperature to salinity changes when
+                        ! minimizing property changes while correcting density [C S-1 ~> degC ppt-1].
+  real :: I_denom       ! The inverse of the magnitude squared of the density gradient in
+                        ! T-S space when stretched with dT_dS_gauge [S2 R-2 ~> ppt2 m6 kg-2]
+  real :: T_min, T_max  ! The minimum and maximum temperatures [C ~> degC]
+  real :: S_min, S_max  ! Minimum and maximum salinities [S ~> ppt]
+  real :: tol_T     ! The tolerance for temperature matches [C ~> degC]
+  real :: tol_S     ! The tolerance for salinity matches [S ~> ppt]
+  real :: tol_rho   ! The tolerance for density matches [R ~> kg m-3]
+  real :: max_t_adj ! The largest permitted temperature changes with each iteration
+                    ! when old_fit is true [C ~> degC]
+  real :: max_s_adj ! The largest permitted salinity changes with each iteration
+                    ! when old_fit is true [S ~> ppt]
   logical :: adjust_salt, old_fit
-  real :: S_min, S_max
-  real :: tol_T    ! The tolerance for temperature matches [degC]
-  real :: tol_S    ! The tolerance for salinity matches [ppt]
-  real :: tol_rho  ! The tolerance for density matches [R ~> kg m-3]
-  real :: max_t_adj, max_s_adj
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
-  integer :: i, j, k, kz, is, ie, js, je, nz, itt
+  integer :: i, j, k, is, ie, js, je, nz, itt
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   ! These hard coded parameters need to be set properly.
-  S_min = 0.5 ; S_max = 65.0
-  max_t_adj = 1.0 ; max_s_adj = 0.5
-  tol_T=1.e-4 ; tol_S=1.e-4 ; tol_rho = 1.e-4*US%kg_m3_to_R
+  S_min = 0.5*US%ppt_to_S ; S_max = 65.0*US%ppt_to_S
+  T_max = 31.0*US%degC_to_C ; T_min = -2.0*US%degC_to_C
+  max_t_adj = 1.0*US%degC_to_C
+  max_s_adj = 0.5*US%ppt_to_S
+  tol_T = 1.0e-4*US%degC_to_C
+  tol_S = 1.0e-4*US%ppt_to_S
+  tol_rho = 1.0e-4*US%kg_m3_to_R
   old_fit = .true.   ! reproduces siena behavior
+
+  dT_dS_gauge = 10.0*US%degC_to_C*US%S_to_ppt  ! 10 degC is weighted equivalently to 1 ppt.
 
   ! ### The whole determine_temperature subroutine needs to be reexamined, both the algorithms
   !     and the extensive use of hard-coded dimensional parameters.
@@ -806,9 +636,9 @@ subroutine determine_temperature(temp, salt, R_tgt, p_ref, niter, land_fill, h, 
     adjust_salt = .true.
     iter_loop: do itt = 1,niter
       do k=1,nz
-        call calculate_density(T(:,k), S(:,k), press, rho(:,k), eos, EOSdom )
+        call calculate_density(T(:,k), S(:,k), press, rho(:,k), EOS, EOSdom )
         call calculate_density_derivs(T(:,k), S(:,k), press, drho_dT(:,k), drho_dS(:,k), &
-                                      eos, EOSdom )
+                                      EOS, EOSdom )
       enddo
       do k=k_start,nz ; do i=is,ie
 !       if (abs(rho(i,k)-R_tgt(k))>tol_rho .and. hin(i,k)>h_massless .and. abs(T(i,k)-land_fill) < epsln) then
@@ -817,7 +647,6 @@ subroutine determine_temperature(temp, salt, R_tgt, p_ref, niter, land_fill, h, 
             dT(i,k) = max(min((R_tgt(k)-rho(i,k)) / drho_dT(i,k), max_t_adj), -max_t_adj)
             T(i,k) = max(min(T(i,k)+dT(i,k), T_max), T_min)
           else
-            dT_dS_gauge = 10.0  ! 10 degC is weighted equivalently to 1 ppt.
             I_denom = 1.0 / (drho_dS(i,k)**2 + dT_dS_gauge**2*drho_dT(i,k)**2)
             dS(i,k) = (R_tgt(k)-rho(i,k)) * drho_dS(i,k) * I_denom
             dT(i,k) = (R_tgt(k)-rho(i,k)) * dT_dS_gauge**2*drho_dT(i,k) * I_denom
@@ -835,9 +664,9 @@ subroutine determine_temperature(temp, salt, R_tgt, p_ref, niter, land_fill, h, 
 
     if (adjust_salt .and. old_fit) then ; do itt = 1,niter
       do k=1,nz
-        call calculate_density(T(:,k), S(:,k), press, rho(:,k), eos, EOSdom )
+        call calculate_density(T(:,k), S(:,k), press, rho(:,k), EOS, EOSdom )
         call calculate_density_derivs(T(:,k), S(:,k), press, drho_dT(:,k), drho_dS(:,k), &
-                                      eos, EOSdom )
+                                      EOS, EOSdom )
       enddo
       do k=k_start,nz ; do i=is,ie
 !       if (abs(rho(i,k)-R_tgt(k))>tol_rho .and. hin(i,k)>h_massless .and. abs(T(i,k)-land_fill) < epsln ) then
@@ -854,53 +683,5 @@ subroutine determine_temperature(temp, salt, R_tgt, p_ref, niter, land_fill, h, 
   enddo
 
 end subroutine determine_temperature
-
-!> Return the index where to insert item x in list a, assuming a is sorted.
-!! The return values [i] is such that all e in a[:i-1] have e <= x, and all e in
-!! a[i:] have e > x. So if x already appears in the list, will
-!! insert just after the rightmost x already there.
-!! Optional args lo (default 1) and hi (default len(a)) bound the
-!! slice of a to be searched.
-function bisect_fast(a, x, lo, hi) result(bi_r)
-  real, dimension(:,:), intent(in) :: a !< Sorted list
-  real, dimension(:), intent(in) :: x !< Item to be inserted
-  integer, dimension(size(a,1)), optional, intent(in) :: lo !< Lower bracket of optional range to search
-  integer, dimension(size(a,1)), optional, intent(in) :: hi !< Upper bracket of optional range to search
-  integer, dimension(size(a,1),size(x,1))  :: bi_r
-
-  integer :: mid,num_x,num_a,i
-  integer, dimension(size(a,1))  :: lo_,hi_,lo0,hi0
-  integer :: nprofs,j
-
-  lo_=1;hi_=size(a,2);num_x=size(x,1);bi_r=-1;nprofs=size(a,1)
-
-  if (PRESENT(lo)) then
-     where (lo>0) lo_=lo
-  endif
-  if (PRESENT(hi)) then
-     where (hi>0) hi_=hi
-  endif
-
-  lo0=lo_;hi0=hi_
-
-  do j=1,nprofs
-    do i=1,num_x
-      lo_=lo0;hi_=hi0
-      do while (lo_(j) < hi_(j))
-        mid = (lo_(j)+hi_(j))/2
-        if (x(i) < a(j,mid)) then
-           hi_(j) = mid
-        else
-           lo_(j) = mid+1
-        endif
-      enddo
-      bi_r(j,i)=lo_(j)
-    enddo
-  enddo
-
-
-  return
-
-end function bisect_fast
 
 end module MOM_tracer_Z_init

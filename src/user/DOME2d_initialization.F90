@@ -13,7 +13,6 @@ use MOM_sponge, only : sponge_CS, set_up_sponge_field, initialize_sponge
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
-use MOM_EOS, only : calculate_density, calculate_density_derivs, EOS_type
 use regrid_consts, only : coordinateMode, DEFAULT_COORDINATE_MODE
 use regrid_consts, only : REGRIDDING_LAYER, REGRIDDING_ZSTAR
 use regrid_consts, only : REGRIDDING_RHO, REGRIDDING_SIGMA
@@ -55,13 +54,13 @@ subroutine DOME2d_initialize_topography( D, G, param_file, max_depth )
   call log_version(param_file, mdl, version, "")
   call get_param(param_file, mdl, "DOME2D_SHELF_WIDTH", dome2d_width_bay, &
                  'Width of shelf, as fraction of domain, in 2d DOME configuration.', &
-                 units='nondim',default=0.1)
+                 units='nondim', default=0.1)
   call get_param(param_file, mdl, "DOME2D_BASIN_WIDTH", dome2d_width_bottom, &
                  'Width of deep ocean basin, as fraction of domain, in 2d DOME configuration.', &
-                 units='nondim',default=0.3)
+                 units='nondim', default=0.3)
   call get_param(param_file, mdl, "DOME2D_SHELF_DEPTH", dome2d_depth_bay, &
                  'Depth of shelf, as fraction of basin depth, in 2d DOME configuration.', &
-                 units='nondim',default=0.2)
+                 units='nondim', default=0.2)
 
   ! location where downslope starts
   l1 = dome2d_width_bay
@@ -90,16 +89,18 @@ subroutine DOME2d_initialize_topography( D, G, param_file, max_depth )
 end subroutine DOME2d_initialize_topography
 
 !> Initialize thicknesses according to coordinate mode
-subroutine DOME2d_initialize_thickness ( h, G, GV, US, param_file, just_read_params )
+subroutine DOME2d_initialize_thickness ( h, depth_tot, G, GV, US, param_file, just_read )
   type(ocean_grid_type),   intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type), intent(in)  :: GV !< Vertical grid structure
   type(unit_scale_type),   intent(in)  :: US !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                            intent(out) :: h           !< The thickness that is being initialized [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZJ_(G)), &
+                           intent(in)  :: depth_tot   !< The nominal total depth of the ocean [Z ~> m]
   type(param_file_type),   intent(in)  :: param_file  !< A structure indicating the open file
                                                       !! to parse for model parameter values.
-  logical,       optional, intent(in)  :: just_read_params !< If present and true, this call will
-                                                      !! only read parameters without changing h.
+  logical,                 intent(in)  :: just_read   !< If true, this call will only read
+                                                      !! parameters without changing h.
 
   ! Local variables
   real :: e0(SZK_(GV))     ! The resting interface heights, in depth units [Z ~> m], usually
@@ -108,15 +109,11 @@ subroutine DOME2d_initialize_thickness ( h, G, GV, US, param_file, just_read_par
                            ! positive upward, in depth units [Z ~> m].
   integer :: i, j, k, is, ie, js, je, nz
   real    :: x
-  real    :: delta_h
   real    :: min_thickness
   real    :: dome2d_width_bay, dome2d_width_bottom, dome2d_depth_bay
-  logical :: just_read    ! If true, just read parameters but set nothing.
   character(len=40) :: verticalCoordinate
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
-
-  just_read = .false. ; if (present(just_read_params)) just_read = just_read_params
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   if (.not.just_read) &
     call MOM_mesg("MOM_initialization.F90, DOME2d_initialize_thickness: setting thickness")
@@ -150,7 +147,7 @@ subroutine DOME2d_initialize_thickness ( h, G, GV, US, param_file, just_read_par
     case ( REGRIDDING_LAYER, REGRIDDING_RHO )
 
       do j=js,je ; do i=is,ie
-        eta1D(nz+1) = -G%bathyT(i,j)
+        eta1D(nz+1) = -depth_tot(i,j)
         do k=nz,1,-1
           eta1D(k) = e0(k)
           if (eta1D(k) < (eta1D(k+1) + GV%Angstrom_Z)) then
@@ -172,7 +169,7 @@ subroutine DOME2d_initialize_thickness ( h, G, GV, US, param_file, just_read_par
  !  case ( IC_RHO_C )
  !
  !    do j=js,je ; do i=is,ie
- !       eta1D(nz+1) = -G%bathyT(i,j)
+ !       eta1D(nz+1) = -depth_tot(i,j)
  !       do k=nz,1,-1
  !         eta1D(k) = e0(k)
  !         if (eta1D(k) < (eta1D(k+1) + min_thickness)) then
@@ -194,7 +191,7 @@ subroutine DOME2d_initialize_thickness ( h, G, GV, US, param_file, just_read_par
     case ( REGRIDDING_ZSTAR )
 
       do j=js,je ; do i=is,ie
-        eta1D(nz+1) = -G%bathyT(i,j)
+        eta1D(nz+1) = -depth_tot(i,j)
         do k=nz,1,-1
           eta1D(k) = e0(k)
           if (eta1D(k) < (eta1D(k+1) + min_thickness)) then
@@ -208,7 +205,7 @@ subroutine DOME2d_initialize_thickness ( h, G, GV, US, param_file, just_read_par
 
     case ( REGRIDDING_SIGMA )
       do j=js,je ; do i=is,ie
-        h(i,j,:) = GV%Z_to_H*G%bathyT(i,j) / nz
+        h(i,j,:) = GV%Z_to_H*depth_tot(i,j) / nz
       enddo ; enddo
 
     case default
@@ -221,35 +218,30 @@ end subroutine DOME2d_initialize_thickness
 
 
 !> Initialize temperature and salinity in the 2d DOME configuration
-subroutine DOME2d_initialize_temperature_salinity ( T, S, h, G, GV, param_file, &
-                     eqn_of_state, just_read_params)
+subroutine DOME2d_initialize_temperature_salinity ( T, S, h, G, GV, US, param_file, just_read)
   type(ocean_grid_type),                     intent(in)  :: G !< Ocean grid structure
   type(verticalGrid_type),                   intent(in)  :: GV !< The ocean's vertical grid structure.
-  real, dimension(SZI_(G),SZJ_(G), SZK_(G)), intent(out) :: T !< Potential temperature [degC]
-  real, dimension(SZI_(G),SZJ_(G), SZK_(G)), intent(out) :: S !< Salinity [ppt]
-  real, dimension(SZI_(G),SZJ_(G), SZK_(G)), intent(in)  :: h !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: T !< Potential temperature [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: S !< Salinity [S ~> ppt]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h !< Layer thickness [H ~> m or kg m-2]
+  type(unit_scale_type),                     intent(in)  :: US !< A dimensional unit scaling type
   type(param_file_type),                     intent(in)  :: param_file !< Parameter file structure
-  type(EOS_type),                            pointer     :: eqn_of_state !< Equation of state structure
-  logical,       optional, intent(in)  :: just_read_params !< If present and true, this call will
+  logical,                                   intent(in)  :: just_read !< If true, this call will
                                                       !! only read parameters without changing T & S.
 
-  ! Local variables
   integer   :: i, j, k, is, ie, js, je, nz
   real      :: x
   integer   :: index_bay_z
-  real      :: delta_S, delta_T
-  real      :: S_ref, T_ref;        ! Reference salinity and temperature within surface layer
-  real      :: S_range, T_range;    ! Range of salinities and temperatures over the vertical
+  real      :: delta_S
+  real      :: S_ref, T_ref         ! Reference salinity [S ~> ppt] and temperature [C ~> degC] within surface layer
+  real      :: S_range, T_range     ! Range of salinities [S ~> ppt] and temperatures [C ~> degC] over the vertical
   real      :: xi0, xi1
-  logical :: just_read    ! If true, just read parameters but set nothing.
   character(len=40) :: verticalCoordinate
   real    :: dome2d_width_bay, dome2d_width_bottom, dome2d_depth_bay
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
-  just_read = .false. ; if (present(just_read_params)) just_read = just_read_params
-
-  call get_param(param_file, mdl,"REGRIDDING_COORDINATE_MODE", verticalCoordinate, &
+  call get_param(param_file, mdl, "REGRIDDING_COORDINATE_MODE", verticalCoordinate, &
                  default=DEFAULT_COORDINATE_MODE, do_not_log=.true.)
   call get_param(param_file, mdl, "DOME2D_SHELF_WIDTH", dome2d_width_bay, &
                  default=0.1, do_not_log=.true.)
@@ -258,13 +250,13 @@ subroutine DOME2d_initialize_temperature_salinity ( T, S, h, G, GV, param_file, 
   call get_param(param_file, mdl, "DOME2D_SHELF_DEPTH", dome2d_depth_bay, &
                  default=0.2, do_not_log=.true.)
   call get_param(param_file, mdl, "S_REF", S_ref, 'Reference salinity', &
-                 default=35.0, units='1e-3', do_not_log=just_read)
-  call get_param(param_file, mdl,"T_REF",T_ref,'Reference temperature', units='degC', &
-                fail_if_missing=.not.just_read, do_not_log=just_read)
-  call get_param(param_file, mdl,"S_RANGE",S_range,'Initial salinity range', &
-                units='1e-3', default=2.0, do_not_log=just_read)
-  call get_param(param_file, mdl,"T_RANGE",T_range,'Initial temperature range', &
-                units='1e-3', default=0.0, do_not_log=just_read)
+                 default=35.0, units='1e-3', scale=US%ppt_to_S, do_not_log=just_read)
+  call get_param(param_file, mdl, "T_REF", T_ref, 'Reference temperature', &
+                 units='degC', scale=US%degC_to_C, fail_if_missing=.not.just_read, do_not_log=just_read)
+  call get_param(param_file, mdl, "S_RANGE", S_range,' Initial salinity range', &
+                units='1e-3', default=2.0, scale=US%ppt_to_S, do_not_log=just_read)
+  call get_param(param_file, mdl, "T_RANGE", T_range, 'Initial temperature range', &
+                units='degC', default=0.0, scale=US%degC_to_C, do_not_log=just_read)
 
   if (just_read) return ! All run-time parameters have been read, so return.
 
@@ -281,7 +273,7 @@ subroutine DOME2d_initialize_temperature_salinity ( T, S, h, G, GV, param_file, 
         xi0 = 0.0
         do k = 1,nz
           xi1 = xi0 + (GV%H_to_Z * h(i,j,k)) / G%max_depth
-          S(i,j,k) = 34.0 + 0.5 * S_range * (xi0 + xi1)
+          S(i,j,k) = 34.0*US%ppt_to_S + 0.5 * S_range * (xi0 + xi1)
           xi0 = xi1
         enddo
       enddo ; enddo
@@ -292,20 +284,20 @@ subroutine DOME2d_initialize_temperature_salinity ( T, S, h, G, GV, param_file, 
         xi0 = 0.0
         do k = 1,nz
           xi1 = xi0 + (GV%H_to_Z * h(i,j,k)) / G%max_depth
-          S(i,j,k) = 34.0 + 0.5 * S_range * (xi0 + xi1)
+          S(i,j,k) = 34.0*US%ppt_to_S + 0.5 * S_range * (xi0 + xi1)
           xi0 = xi1
         enddo
         x = ( G%geoLonT(i,j) - G%west_lon ) / G%len_lon
         if ( x <= dome2d_width_bay ) then
-          S(i,j,nz) = 34.0 + S_range
+          S(i,j,nz) = 34.0*US%ppt_to_S + S_range
         endif
       enddo ; enddo
 
     case ( REGRIDDING_LAYER )
 
-      delta_S = S_range / ( G%ke - 1.0 )
+      delta_S = S_range / ( GV%ke - 1.0 )
       S(:,:,1) = S_ref
-      do k = 2,G%ke
+      do k = 2,GV%ke
         S(:,:,k) = S(:,:,k-1) + delta_S
       enddo
 
@@ -317,12 +309,12 @@ subroutine DOME2d_initialize_temperature_salinity ( T, S, h, G, GV, param_file, 
 
   ! Modify salinity and temperature when z coordinates are used
   if ( coordinateMode(verticalCoordinate) == REGRIDDING_ZSTAR ) then
-    index_bay_z = Nint ( dome2d_depth_bay * G%ke )
+    index_bay_z = Nint ( dome2d_depth_bay * GV%ke )
     do j = G%jsc,G%jec ; do i = G%isc,G%iec
       x = ( G%geoLonT(i,j) - G%west_lon ) / G%len_lon
       if ( x <= dome2d_width_bay ) then
-        S(i,j,1:index_bay_z) = S_ref + S_range; ! Use for z coordinates
-        T(i,j,1:index_bay_z) = 1.0;             ! Use for z coordinates
+        S(i,j,1:index_bay_z) = S_ref + S_range  ! Use for z coordinates
+        T(i,j,1:index_bay_z) = 1.0*US%degC_to_C ! Use for z coordinates
       endif
     enddo ; enddo ! i and j loops
   endif ! Z initial conditions
@@ -332,20 +324,19 @@ subroutine DOME2d_initialize_temperature_salinity ( T, S, h, G, GV, param_file, 
     do i = G%isc,G%iec ; do j = G%jsc,G%jec
       x = ( G%geoLonT(i,j) - G%west_lon ) / G%len_lon
       if ( x <= dome2d_width_bay ) then
-        S(i,j,1:G%ke) = S_ref + S_range;    ! Use for sigma coordinates
-        T(i,j,1:G%ke) = 1.0;                ! Use for sigma coordinates
+        S(i,j,1:GV%ke) = S_ref + S_range     ! Use for sigma coordinates
+        T(i,j,1:GV%ke) = 1.0*US%degC_to_C    ! Use for sigma coordinates
       endif
     enddo ; enddo
   endif
 
   ! Modify temperature when rho coordinates are used
-  T(G%isc:G%iec,G%jsc:G%jec,1:G%ke) = 0.0
   if (( coordinateMode(verticalCoordinate) == REGRIDDING_RHO ) .or. &
       ( coordinateMode(verticalCoordinate) == REGRIDDING_LAYER )) then
     do i = G%isc,G%iec ; do j = G%jsc,G%jec
       x = ( G%geoLonT(i,j) - G%west_lon ) / G%len_lon
       if ( x <= dome2d_width_bay ) then
-        T(i,j,G%ke) = 1.0
+        T(i,j,GV%ke) = 1.0*US%degC_to_C
       endif
     enddo ; enddo
   endif
@@ -353,35 +344,39 @@ subroutine DOME2d_initialize_temperature_salinity ( T, S, h, G, GV, param_file, 
 end subroutine DOME2d_initialize_temperature_salinity
 
 !> Set up sponges in 2d DOME configuration
-subroutine DOME2d_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CSp, ACSp)
+subroutine DOME2d_initialize_sponges(G, GV, US, tv, depth_tot, param_file, use_ALE, CSp, ACSp)
   type(ocean_grid_type),   intent(in) :: G  !< Ocean grid structure
   type(verticalGrid_type), intent(in) :: GV !< Vertical grid structure
   type(unit_scale_type),   intent(in) :: US !< A dimensional unit scaling type
   type(thermo_var_ptrs),   intent(in) :: tv !< Thermodynamics structure
+  real, dimension(SZI_(G),SZJ_(G)), &
+                           intent(in) :: depth_tot  !< The nominal total depth of the ocean [Z ~> m]
   type(param_file_type),   intent(in) :: param_file !< Parameter file structure
   logical,                 intent(in) :: use_ALE !< If true, indicates model is in ALE mode
   type(sponge_CS),         pointer    :: CSp !< Layer-mode sponge structure
   type(ALE_sponge_CS),     pointer    :: ACSp !< ALE-mode sponge structure
   ! Local variables
-  real :: T(SZI_(G),SZJ_(G),SZK_(G))   ! A temporary array for temp [degC]
-  real :: S(SZI_(G),SZJ_(G),SZK_(G))   ! A temporary array for salt [ppt]
-  real :: h(SZI_(G),SZJ_(G),SZK_(G))   ! A temporary array for thickness [H ~> m or kg m-2].
-  real :: eta(SZI_(G),SZJ_(G),SZK_(G)+1) ! A temporary array for thickness [Z ~> m]
-  real :: Idamp(SZI_(G),SZJ_(G))       ! The inverse damping rate [T-1 ~> s-1].
-  real :: S_ref, T_ref                 ! Reference salinity and temerature within surface layer
-  real :: S_range, T_range             ! Range of salinities and temperatures over the vertical
-  real :: e0(SZK_(G)+1)             ! The resting interface heights [Z ~> m],
+  real :: T(SZI_(G),SZJ_(G),SZK_(GV))  ! A temporary array for temp [C ~> degC]
+  real :: S(SZI_(G),SZJ_(G),SZK_(GV))  ! A temporary array for salt [S ~> ppt]
+  real :: h(SZI_(G),SZJ_(G),SZK_(GV))  ! A temporary array for thickness [H ~> m or kg m-2].
+  real :: eta(SZI_(G),SZJ_(G),SZK_(GV)+1) ! A temporary array for interface heights [Z ~> m]
+  real :: Idamp(SZI_(G),SZJ_(G))       ! The sponge damping rate [T-1 ~> s-1]
+  real :: S_ref                        ! Reference salinity within the surface layer [S ~> ppt]
+  real :: T_ref                        ! Reference temperature within the surface layer [C ~> degC]
+  real :: S_range                      ! Range of salinities in the vertical [S ~> ppt]
+  real :: T_range                      ! Range of temperatures in the vertical [C ~> degC]
+  real :: e0(SZK_(GV)+1)            ! The resting interface heights [Z ~> m],
                                     ! usually negative because it is positive upward.
-  real :: eta1D(SZK_(G)+1)          ! Interface height relative to the sea surface
+  real :: eta1D(SZK_(GV)+1)         ! Interface height relative to the sea surface
                                     ! positive upward [Z ~> m].
-  real :: d_eta(SZK_(G))            ! The layer thickness in a column [Z ~> m].
+  real :: d_eta(SZK_(GV))           ! The layer thickness in a column [Z ~> m].
   real :: dome2d_width_bay, dome2d_width_bottom, dome2d_depth_bay
   real :: dome2d_west_sponge_time_scale, dome2d_east_sponge_time_scale ! Sponge timescales [T ~> s]
   real :: dome2d_west_sponge_width, dome2d_east_sponge_width
   real :: dummy1, x, z
   integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
   call get_param(param_file, mdl, "DOME2D_WEST_SPONGE_TIME_SCALE", dome2d_west_sponge_time_scale, &
@@ -415,13 +410,13 @@ subroutine DOME2d_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CSp, AC
                  default=0.3, do_not_log=.true.)
   call get_param(param_file, mdl, "DOME2D_SHELF_DEPTH", dome2d_depth_bay, &
                  default=0.2, do_not_log=.true.)
-  call get_param(param_file, mdl, "S_REF", S_ref, default=35.0)
-  call get_param(param_file, mdl, "T_REF", T_ref)
-  call get_param(param_file, mdl, "S_RANGE", S_range, default=2.0)
-  call get_param(param_file, mdl, "T_RANGE", T_range, default=0.0)
+  call get_param(param_file, mdl, "S_REF", S_ref, default=35.0, scale=US%ppt_to_S)
+  call get_param(param_file, mdl, "T_REF", T_ref, scale=US%degC_to_C)
+  call get_param(param_file, mdl, "S_RANGE", S_range, default=2.0, scale=US%ppt_to_S)
+  call get_param(param_file, mdl, "T_RANGE", T_range, default=0.0, scale=US%degC_to_C)
 
 
-  ! Set the inverse damping rate as a function of position
+  ! Set the sponge damping rate as a function of position
   Idamp(:,:) = 0.0
   do j=js,je ; do i=is,ie
     if (G%mask2dT(i,j) > 0.) then ! Only set damping rate for wet points
@@ -447,11 +442,11 @@ subroutine DOME2d_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CSp, AC
 
     ! Construct a grid (somewhat arbitrarily) to describe  the sponge T/S on
     do k=1,nz
-     e0(k) = -G%max_depth * ( real(k-1) / real(nz) )
+      e0(k) = -G%max_depth * ( real(k-1) / real(nz) )
     enddo
     e0(nz+1) = -G%max_depth
     do j=js,je ; do i=is,ie
-      eta1D(nz+1) = -G%bathyT(i,j)
+      eta1D(nz+1) = -depth_tot(i,j)
       do k=nz,1,-1
         eta1D(k) = e0(k)
         if (eta1D(k) < (eta1D(k+1) + GV%Angstrom_Z)) then
@@ -463,15 +458,15 @@ subroutine DOME2d_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CSp, AC
       enddo
     enddo ; enddo
     ! Store the grid on which the T/S sponge data will reside
-    call initialize_ALE_sponge(Idamp, G, param_file, ACSp, h, nz)
+    call initialize_ALE_sponge(Idamp, G, GV, param_file, ACSp, h, nz)
 
     ! Construct temperature and salinity on the arbitrary grid
     T(:,:,:) = 0.0 ; S(:,:,:) = 0.0
     do j=js,je ; do i=is,ie
-      z = -G%bathyT(i,j)
+      z = -depth_tot(i,j)
       do k = nz,1,-1
         z = z + 0.5 * GV%H_to_Z * h(i,j,k) ! Position of the center of layer k
-        S(i,j,k) = 34.0 - 1.0 * (z / (G%max_depth))
+        S(i,j,k) = 34.0*US%ppt_to_S - 1.0*US%ppt_to_S * (z / (G%max_depth))
         if ( ( G%geoLonT(i,j) - G%west_lon ) / G%len_lon < dome2d_west_sponge_width ) &
           S(i,j,k) = S_ref + S_range
         z = z + 0.5 *  GV%H_to_Z * h(i,j,k) ! Position of the interface k
@@ -479,17 +474,17 @@ subroutine DOME2d_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CSp, AC
     enddo ; enddo
 
     if ( associated(tv%T) ) then
-      call set_up_ALE_sponge_field(T, G, tv%T, ACSp)
+      call set_up_ALE_sponge_field(T, G, GV, tv%T, ACSp)
     endif
     if ( associated(tv%S) ) then
-      call set_up_ALE_sponge_field(S, G, tv%S, ACSp)
+      call set_up_ALE_sponge_field(S, G, GV, tv%S, ACSp)
     endif
 
   else
 
     ! Construct interface heights to restore toward
     do j=js,je ; do i=is,ie
-      eta1D(nz+1) = -G%bathyT(i,j)
+      eta1D(nz+1) = -depth_tot(i,j)
       do k=nz,1,-1
         eta1D(K) = -G%max_depth * real(k-1) / real(nz)
         if (eta1D(K) < (eta1D(K+1) + GV%Angstrom_Z)) then
@@ -506,7 +501,7 @@ subroutine DOME2d_initialize_sponges(G, GV, US, tv, param_file, use_ALE, CSp, AC
         d_eta(nz) = dome2d_depth_bay * G%max_depth - (nz-1) * GV%Angstrom_Z
       endif
 
-      eta(i,j,nz+1) = -G%bathyT(i,j)
+      eta(i,j,nz+1) = -depth_tot(i,j)
       do K=nz,1,-1
         eta(i,j,K) = eta(i,j,K+1) + d_eta(k)
       enddo

@@ -12,7 +12,6 @@ use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING, is_root_pe
 use MOM_file_parser, only : read_param, get_param, log_param, log_version, param_file_type
 use MOM_grid, only : MOM_grid_init, ocean_grid_type
 use MOM_get_input, only : directories, Get_MOM_input
-use mpp_mod, only : mpp_sum, mpp_max, mpp_min, mpp_pe, mpp_npes, mpp_sync
 use MOM_coms, only : reproducing_sum
 use MOM_checksums, only : hchksum, qchksum, chksum, uchksum, vchksum, uvchksum
 
@@ -47,7 +46,7 @@ type, public :: ice_shelf_state
                                !! shelf at the ice-ocean interface [Q R Z T-1 ~> W m-2].
 
     tfreeze => NULL()          !< The freezing point potential temperature
-                               !! an the ice-ocean interface [degC].
+                               !! at the ice-ocean interface [C ~> degC].
 
 end type ice_shelf_state
 
@@ -68,16 +67,16 @@ subroutine ice_shelf_state_init(ISS, G)
   endif
   allocate(ISS)
 
-  allocate(ISS%mass_shelf(isd:ied,jsd:jed) )   ; ISS%mass_shelf(:,:) = 0.0
-  allocate(ISS%area_shelf_h(isd:ied,jsd:jed) ) ; ISS%area_shelf_h(:,:) = 0.0
-  allocate(ISS%h_shelf(isd:ied,jsd:jed) )      ; ISS%h_shelf(:,:) = 0.0
-  allocate(ISS%hmask(isd:ied,jsd:jed) )        ; ISS%hmask(:,:) = -2.0
+  allocate(ISS%mass_shelf(isd:ied,jsd:jed), source=0.0 )
+  allocate(ISS%area_shelf_h(isd:ied,jsd:jed), source=0.0 )
+  allocate(ISS%h_shelf(isd:ied,jsd:jed), source=0.0 )
+  allocate(ISS%hmask(isd:ied,jsd:jed), source=-2.0 )
 
-  allocate(ISS%tflux_ocn(isd:ied,jsd:jed) )    ; ISS%tflux_ocn(:,:) = 0.0
-  allocate(ISS%water_flux(isd:ied,jsd:jed) )   ; ISS%water_flux(:,:) = 0.0
-  allocate(ISS%salt_flux(isd:ied,jsd:jed) )    ; ISS%salt_flux(:,:) = 0.0
-  allocate(ISS%tflux_shelf(isd:ied,jsd:jed) )  ; ISS%tflux_shelf(:,:) = 0.0
-  allocate(ISS%tfreeze(isd:ied,jsd:jed) )      ; ISS%tfreeze(:,:) = 0.0
+  allocate(ISS%tflux_ocn(isd:ied,jsd:jed), source=0.0 )
+  allocate(ISS%water_flux(isd:ied,jsd:jed), source=0.0 )
+  allocate(ISS%salt_flux(isd:ied,jsd:jed), source=0.0 )
+  allocate(ISS%tflux_shelf(isd:ied,jsd:jed), source=0.0 )
+  allocate(ISS%tfreeze(isd:ied,jsd:jed), source=0.0 )
 
 end subroutine ice_shelf_state_init
 

@@ -60,10 +60,10 @@ module MOM_diag_remap
 use MOM_coms,             only : reproducing_sum_EFP, EFP_to_real
 use MOM_coms,             only : EFP_type, assignment(=), EFP_sum_across_PEs
 use MOM_error_handler,    only : MOM_error, FATAL, assert, WARNING
+use MOM_debugging,        only : check_column_integrals
+use MOM_diag_manager_infra,only : MOM_diag_axis_init
 use MOM_diag_vkernels,    only : interpolate_column, reintegrate_column
 use MOM_file_parser,      only : get_param, log_param, param_file_type
-use MOM_io,               only : slasher, mom_read_data
-use MOM_io,               only : file_exists, field_size
 use MOM_string_functions, only : lowercase, extractWord
 use MOM_grid,             only : ocean_grid_type
 use MOM_unit_scaling,     only : unit_scale_type
@@ -72,6 +72,7 @@ use MOM_EOS,              only : EOS_type
 use MOM_remapping,        only : remapping_CS, initialize_remapping
 use MOM_remapping,        only : remapping_core_h
 use MOM_regridding,       only : regridding_CS, initialize_regridding
+use MOM_regridding,       only : end_regridding
 use MOM_regridding,       only : set_regrid_params, get_regrid_size
 use MOM_regridding,       only : getCoordinateInterfaces
 use MOM_regridding,       only : get_zlike_CS, get_sigma_CS, get_rho_CS
@@ -80,10 +81,7 @@ use coord_zlike,          only : build_zstar_column
 use coord_sigma,          only : build_sigma_column
 use coord_rho,            only : build_rho_column
 
-use diag_axis_mod,     only : get_diag_axis_name
-use diag_manager_mod,  only : diag_axis_init
 
-use MOM_debugging,     only : check_column_integrals
 implicit none ; private
 
 public diag_remap_ctrl
@@ -151,6 +149,7 @@ subroutine diag_remap_end(remap_cs)
   type(diag_remap_ctrl), intent(inout) :: remap_cs !< Diag remapping control structure
 
   if (allocated(remap_cs%h)) deallocate(remap_cs%h)
+
   remap_cs%configured = .false.
   remap_cs%initialized = .false.
   remap_cs%used = .false.
@@ -168,6 +167,7 @@ subroutine diag_remap_diag_registration_closed(remap_cs)
 
   if (.not. remap_cs%used) then
     call diag_remap_end(remap_cs)
+    call end_regridding(remap_cs%regrid_cs)
   endif
 
 end subroutine diag_remap_diag_registration_closed
@@ -189,16 +189,11 @@ subroutine diag_remap_configure_axes(remap_cs, GV, US, param_file)
   type(verticalGrid_type), intent(in)    :: GV !< ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US !< A dimensional unit scaling type
   type(param_file_type),   intent(in)    :: param_file !< Parameter file structure
+
   ! Local variables
-  integer :: nzi(4), nzl(4), k
-  character(len=200) :: inputdir, string, filename, int_varname, layer_varname
   character(len=40)  :: mod  = "MOM_diag_remap" ! This module's name.
-  character(len=8)   :: units, expected_units
-  character(len=34)  :: longname, string2
-
-  character(len=256) :: err_msg
-  logical :: ierr
-
+  character(len=8)   :: units
+  character(len=34)  :: longname
   real, allocatable, dimension(:) :: interfaces, layers
 
   call initialize_regridding(remap_cs%regrid_cs, GV, US, GV%max_depth, param_file, mod, &
@@ -222,13 +217,13 @@ subroutine diag_remap_configure_axes(remap_cs, GV, US, param_file)
   allocate(interfaces(remap_cs%nz+1))
   allocate(layers(remap_cs%nz))
 
-  interfaces(:) = getCoordinateInterfaces(remap_cs%regrid_cs)
+  interfaces(:) = getCoordinateInterfaces(remap_cs%regrid_cs, undo_scaling=.true.)
   layers(:) = 0.5 * ( interfaces(1:remap_cs%nz) + interfaces(2:remap_cs%nz+1) )
 
-  remap_cs%interface_axes_id = diag_axis_init(lowercase(trim(remap_cs%diag_coord_name))//'_i', &
+  remap_cs%interface_axes_id = MOM_diag_axis_init(lowercase(trim(remap_cs%diag_coord_name))//'_i', &
                                               interfaces, trim(units), 'z', &
                                               trim(longname)//' at interface', direction=-1)
-  remap_cs%layer_axes_id = diag_axis_init(lowercase(trim(remap_cs%diag_coord_name))//'_l', &
+  remap_cs%layer_axes_id = MOM_diag_axis_init(lowercase(trim(remap_cs%diag_coord_name))//'_l', &
                                           layers, trim(units), 'z', &
                                           trim(longname)//' at cell center', direction=-1, &
                                           edges=remap_cs%interface_axes_id)
@@ -278,9 +273,9 @@ subroutine diag_remap_update(remap_cs, G, GV, US, h, T, S, eqn_of_state, h_targe
   type(verticalGrid_type), intent(in) :: GV !< ocean vertical grid structure
   type(unit_scale_type),   intent(in) :: US !< A dimensional unit scaling type
   real, dimension(:,:,:),  intent(in) :: h  !< New thickness [H ~> m or kg m-2]
-  real, dimension(:,:,:),  intent(in) :: T  !< New temperatures [degC]
-  real, dimension(:,:,:),  intent(in) :: S  !< New salinities [ppt]
-  type(EOS_type),          pointer    :: eqn_of_state !< A pointer to the equation of state
+  real, dimension(:,:,:),  intent(in) :: T  !< New temperatures [C ~> degC]
+  real, dimension(:,:,:),  intent(in) :: S  !< New salinities [S ~> ppt]
+  type(EOS_type),          intent(in) :: eqn_of_state !< A pointer to the equation of state
   real, dimension(:,:,:),  intent(inout) :: h_target  !< The new diagnostic thicknesses [H ~> m or kg m-2]
 
   ! Local variables
@@ -321,22 +316,22 @@ subroutine diag_remap_update(remap_cs, G, GV, US, h, T, S, eqn_of_state, h_targe
 
     if (remap_cs%vertical_coord == coordinateMode('ZSTAR')) then
       call build_zstar_column(get_zlike_CS(remap_cs%regrid_cs), &
-                              GV%Z_to_H*G%bathyT(i,j), sum(h(i,j,:)), &
+                              GV%Z_to_H*(G%bathyT(i,j)+G%Z_ref), sum(h(i,j,:)), &
                               zInterfaces, zScale=GV%Z_to_H)
     elseif (remap_cs%vertical_coord == coordinateMode('SIGMA')) then
       call build_sigma_column(get_sigma_CS(remap_cs%regrid_cs), &
-                              GV%Z_to_H*G%bathyT(i,j), sum(h(i,j,:)), zInterfaces)
+                              GV%Z_to_H*(G%bathyT(i,j)+G%Z_ref), sum(h(i,j,:)), zInterfaces)
     elseif (remap_cs%vertical_coord == coordinateMode('RHO')) then
-      call build_rho_column(get_rho_CS(remap_cs%regrid_cs), G%ke, &
-                            GV%Z_to_H*G%bathyT(i,j), h(i,j,:), T(i,j,:), S(i,j,:), &
+      call build_rho_column(get_rho_CS(remap_cs%regrid_cs), GV%ke, &
+                            GV%Z_to_H*(G%bathyT(i,j)+G%Z_ref), h(i,j,:), T(i,j,:), S(i,j,:), &
                             eqn_of_state, zInterfaces, h_neglect, h_neglect_edge)
     elseif (remap_cs%vertical_coord == coordinateMode('SLIGHT')) then
 !     call build_slight_column(remap_cs%regrid_cs,remap_cs%remap_cs, nz, &
-!                           GV%Z_to_H*G%bathyT(i,j), sum(h(i,j,:)), zInterfaces)
+!                           GV%Z_to_H*(G%bathyT(i,j)+G%Z_ref), sum(h(i,j,:)), zInterfaces)
       call MOM_error(FATAL,"diag_remap_update: SLIGHT coordinate not coded for diagnostics yet!")
     elseif (remap_cs%vertical_coord == coordinateMode('HYCOM1')) then
 !     call build_hycom1_column(remap_cs%regrid_cs, nz, &
-!                           GV%Z_to_H*G%bathyT(i,j), sum(h(i,j,:)), zInterfaces)
+!                           GV%Z_to_H*(G%bathyT(i,j)+G%Z_ref), sum(h(i,j,:)), zInterfaces)
       call MOM_error(FATAL,"diag_remap_update: HYCOM1 coordinate not coded for diagnostics yet!")
     endif
     do k = 1,nz
@@ -363,7 +358,7 @@ subroutine diag_remap_do_remap(remap_cs, G, GV, h, staggered_in_x, staggered_in_
   real, dimension(size(h,3)) :: h_src    ! A column of source thicknesses [H ~> m or kg m-2]
   real :: h_neglect, h_neglect_edge ! Negligible thicknesses [H ~> m or kg m-2]
   integer :: nz_src, nz_dest
-  integer :: i, j, k                !< Grid index
+  integer :: i, j                   !< Grid index
   integer :: i1, j1                 !< 1-based index
   integer :: i_lo, i_hi, j_lo, j_hi !< (uv->h) interpolation indices
   integer :: shift                  !< Symmetric offset for 1-based indexing
@@ -385,7 +380,7 @@ subroutine diag_remap_do_remap(remap_cs, G, GV, h, staggered_in_x, staggered_in_
   remapped_field(:,:,:) = 0.
 
   ! Symmetric grid offset under 1-based indexing; see header for details.
-  shift = 0; if (G%symmetric) shift = 1
+  shift = 0 ; if (G%symmetric) shift = 1
 
   if (staggered_in_x .and. .not. staggered_in_y) then
     ! U-points
@@ -502,7 +497,7 @@ subroutine vertically_reintegrate_diag_field(remap_cs, G, h, h_target, staggered
   real, dimension(remap_cs%nz) :: h_dest ! Destination thicknesses [H ~> m or kg m-2]
   real, dimension(size(h,3)) :: h_src    ! A column of source thicknesses [H ~> m or kg m-2]
   integer :: nz_src, nz_dest
-  integer :: i, j, k                !< Grid index
+  integer :: i, j                   !< Grid index
   integer :: i1, j1                 !< 1-based index
   integer :: i_lo, i_hi, j_lo, j_hi !< (uv->h) interpolation indices
   integer :: shift                  !< Symmetric offset for 1-based indexing
@@ -516,7 +511,7 @@ subroutine vertically_reintegrate_diag_field(remap_cs, G, h, h_target, staggered
   reintegrated_field(:,:,:) = 0.
 
   ! Symmetric grid offset under 1-based indexing; see header for details.
-  shift = 0; if (G%symmetric) shift = 1
+  shift = 0 ; if (G%symmetric) shift = 1
 
   if (staggered_in_x .and. .not. staggered_in_y) then
     ! U-points
@@ -582,7 +577,7 @@ subroutine vertically_interpolate_diag_field(remap_cs, G, h, staggered_in_x, sta
   real, dimension(remap_cs%nz) :: h_dest ! Destination thicknesses [H ~> m or kg m-2]
   real, dimension(size(h,3)) :: h_src    ! A column of source thicknesses [H ~> m or kg m-2]
   integer :: nz_src, nz_dest
-  integer :: i, j, k                !< Grid index
+  integer :: i, j                   !< Grid index
   integer :: i1, j1                 !< 1-based index
   integer :: i_lo, i_hi, j_lo, j_hi !< (uv->h) interpolation indices
   integer :: shift                  !< Symmetric offset for 1-based indexing
@@ -597,7 +592,7 @@ subroutine vertically_interpolate_diag_field(remap_cs, G, h, staggered_in_x, sta
   nz_dest = remap_cs%nz
 
   ! Symmetric grid offset under 1-based indexing; see header for details.
-  shift = 0; if (G%symmetric) shift = 1
+  shift = 0 ; if (G%symmetric) shift = 1
 
   if (staggered_in_x .and. .not. staggered_in_y) then
     ! U-points

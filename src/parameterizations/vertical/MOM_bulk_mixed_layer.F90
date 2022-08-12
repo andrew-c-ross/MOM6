@@ -30,6 +30,7 @@ public bulkmixedlayer, bulkmixedlayer_init
 
 !> The control structure with parameters for the MOM_bulk_mixed_layer module
 type, public :: bulkmixedlayer_CS ; private
+  logical :: initialized = .false. !< True if this control structure has been initialized.
   integer :: nkml            !< The number of layers in the mixed layer.
   integer :: nkbl            !< The number of buffer layers.
   integer :: nsw             !< The number of bands of penetrating shortwave radiation.
@@ -56,7 +57,7 @@ type, public :: bulkmixedlayer_CS ; private
                              !! If the value is small enough, this should not affect the solution.
   real    :: omega           !<   The Earth's rotation rate [T-1 ~> s-1].
   real    :: dT_dS_wt        !<   When forced to extrapolate T & S to match the
-                             !! layer densities, this factor (in degC / ppt) is
+                             !! layer densities, this factor [C S-1 ~> degC ppt-1] is
                              !! combined with the derivatives of density with T & S
                              !! to determines what direction is orthogonal to
                              !! density contours.  It should be a typical value of
@@ -118,7 +119,7 @@ type, public :: bulkmixedlayer_CS ; private
   real    :: Allowed_T_chg   !< The amount by which temperature is allowed
                              !! to exceed previous values during detrainment, K.
   real    :: Allowed_S_chg   !< The amount by which salinity is allowed
-                             !! to exceed previous values during detrainment, ppt.
+                             !! to exceed previous values during detrainment [S ~> ppt]
 
   ! These are terms in the mixed layer TKE budget, all in [Z L2 T-3 ~> m3 s-3] except as noted.
   real, allocatable, dimension(:,:) :: &
@@ -135,8 +136,6 @@ type, public :: bulkmixedlayer_CS ; private
                        !! detrainment [R Z L2 T-3 ~> W m-2].
     diag_PE_detrain2   !< The spurious source of potential energy due to mixed layer only
                        !! detrainment [R Z L2 T-3 ~> W m-2].
-  logical :: allow_clocks_in_omp_loops  !< If true, clocks can be called from inside loops that can
-                                        !! be threaded. To run with multiple threads, set to False.
   type(group_pass_type) :: pass_h_sum_hmbl_prev !< For group halo pass
 
   !>@{ Diagnostic IDs
@@ -149,42 +148,13 @@ type, public :: bulkmixedlayer_CS ; private
 end type bulkmixedlayer_CS
 
 !>@{ CPU clock IDs
-integer :: id_clock_detrain=0, id_clock_mech=0, id_clock_conv=0, id_clock_adjustment=0
-integer :: id_clock_EOS=0, id_clock_resort=0, id_clock_pass=0
+integer :: id_clock_pass=0
 !>@}
 
 contains
 
-!>    This subroutine partially steps the bulk mixed layer model.
-!!  The following processes are executed, in the order listed.
-!!    1. Undergo convective adjustment into mixed layer.
-!!    2. Apply surface heating and cooling.
-!!    3. Starting from the top, entrain whatever fluid the TKE budget
-!!       permits.  Penetrating shortwave radiation is also applied at
-!!      this point.
-!!    4. If there is any unentrained fluid that was formerly in the
-!!      mixed layer, detrain this fluid into the buffer layer.  This
-!!     is equivalent to the mixed layer detraining to the Monin-
-!!       Obukhov depth.
-!!    5. Divide the fluid in the mixed layer evenly into CS%nkml pieces.
-!!    6. Split the buffer layer if appropriate.
-!! Layers 1 to nkml are the mixed layer, nkml+1 to nkml+nkbl are the
-!! buffer layers. The results of this subroutine are mathematically
-!! identical if there are multiple pieces of the mixed layer with
-!! the same density or if there is just a single layer. There is no
-!! stability limit on the time step.
-!!
-!!   The key parameters for the mixed layer are found in the control structure.
-!! These include mstar, nstar, nstar2, pen_SW_frac, pen_SW_scale, and TKE_decay.
-!!   For the Oberhuber (1993) mixed layer, the values of these are:
-!!      pen_SW_frac = 0.42, pen_SW_scale = 15.0 m, mstar = 1.25,
-!!      nstar = 1, TKE_decay = 2.5, conv_decay = 0.5
-!!  TKE_decay is 1/kappa in eq. 28 of Oberhuber (1993), while conv_decay is 1/mu.
-!!  Conv_decay has been eliminated in favor of the well-calibrated form for the
-!!  efficiency of penetrating convection from Wang (2003).
-!!    For a traditional Kraus-Turner mixed layer, the values are:
-!!      pen_SW_frac = 0.0, pen_SW_scale = 0.0 m, mstar = 1.25,
-!!      nstar = 0.4, TKE_decay = 0.0, conv_decay = 0.0
+!> This subroutine partially steps the bulk mixed layer model.
+!! See \ref BML for more details.
 subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, CS, &
                           optics, Hml, aggregate_FW_forcing, dt_diag, last_call)
   type(ocean_grid_type),      intent(inout) :: G      !< The ocean's grid structure.
@@ -213,11 +183,10 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
                               intent(inout) :: eb     !< The amount of fluid moved upward into a
                                                       !! layer; this should be increased due to
                                                       !! mixed layer entrainment [H ~> m or kg m-2].
-  type(bulkmixedlayer_CS),    pointer       :: CS     !< The control structure returned by a
-                                                      !! previous call to mixedlayer_init.
-  type(optics_type),          pointer       :: optics !< The structure containing the inverse of the
-                                                      !! vertical absorption decay scale for
-                                                      !! penetrating shortwave radiation [m-1].
+  type(bulkmixedlayer_CS),    intent(inout) :: CS     !< Bulk mixed layer control struct
+  type(optics_type),          pointer       :: optics !< The structure that can be queried for the
+                                                      !! inverse of the vertical absorption decay
+                                                      !! scale for penetrating shortwave radiation.
   real, dimension(:,:),       pointer       :: Hml    !< Active mixed layer depth [Z ~> m].
   logical,                    intent(in)    :: aggregate_FW_forcing !< If true, the net incoming and
                                                      !! outgoing surface freshwater fluxes are
@@ -243,8 +212,8 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
   ! will be used to hold the new mixed layer properties.
   real, dimension(SZI_(G),SZK0_(GV)) :: &
     h, &        !   The layer thickness [H ~> m or kg m-2].
-    T, &        !   The layer temperatures [degC].
-    S, &        !   The layer salinities [ppt].
+    T, &        !   The layer temperatures [C ~> degC].
+    S, &        !   The layer salinities [S ~> ppt].
     R0, &       !   The potential density referenced to the surface [R ~> kg m-3].
     Rcv         !   The coordinate variable potential density [R ~> kg m-3].
   real, dimension(SZI_(G),SZK_(GV)) :: &
@@ -261,7 +230,7 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
   integer, dimension(SZI_(G),SZK_(GV)) :: &
     ksort       !   The sorted k-index that each original layer goes to.
   real, dimension(SZI_(G),SZJ_(G)) :: &
-    h_miss      !   The summed absolute mismatch [Z ~> m].
+    h_miss      !   The summed absolute mismatch [H ~> m or kg m-2].
   real, dimension(SZI_(G)) :: &
     TKE, &      !   The turbulent kinetic energy available for mixing over a
                 ! time step [Z L2 T-2 ~> m3 s-2].
@@ -274,9 +243,9 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
     Rcv_tot, &  !   The integrated coordinate value potential density of the
                 ! layers that are fully entrained [H R ~> kg m-2 or kg2 m-5].
     Ttot, &     !   The integrated temperature of layers which are fully
-                ! entrained [degC H ~> degC m or degC kg m-2].
+                ! entrained [C H ~> degC m or degC kg m-2].
     Stot, &     !   The integrated salt of layers which are fully entrained
-                ! [H ppt ~> m ppt or ppt kg m-2].
+                ! [H S ~> m ppt or ppt kg m-2].
     uhtot, &    !   The depth integrated zonal and meridional velocities in the
     vhtot, &    ! mixed layer [H L T-1 ~> m2 s-1 or kg m-1 s-1].
 
@@ -285,28 +254,28 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
                      ! ocean over a time step [H ~> m or kg m-2].
     NetMassOut,   &  ! The mass flux (if non-Boussinesq) or volume flux (if Boussinesq)
                      ! over a time step from evaporating fresh water [H ~> m or kg m-2]
-    Net_heat, & !   The net heating at the surface over a time step [degC H ~> degC m or degC kg m-2].
+    Net_heat, & !   The net heating at the surface over a time step [C H ~> degC m or degC kg m-2]
                 ! Any penetrating shortwave radiation is not included in Net_heat.
-    Net_salt, & ! The surface salt flux into the ocean over a time step, ppt H.
+    Net_salt, & ! The surface salt flux into the ocean over a time step [S H  ~> ppt m or ppt kg m-2]
     Idecay_len_TKE, &  ! The inverse of a turbulence decay length scale [H-1 ~> m-1 or m2 kg-1].
     p_ref, &    !   Reference pressure for the potential density governing mixed
                 ! layer dynamics, almost always 0 (or 1e5) [R L2 T-2 ~> Pa].
     p_ref_cv, & !   Reference pressure for the potential density which defines
                 ! the coordinate variable, set to P_Ref [R L2 T-2 ~> Pa].
     dR0_dT, &   !   Partial derivative of the mixed layer potential density with
-                ! temperature [R degC-1 ~> kg m-3 degC-1].
+                ! temperature [R C-1 ~> kg m-3 degC-1].
     dRcv_dT, &  !   Partial derivative of the coordinate variable potential
-                ! density in the mixed layer with temperature [R degC-1 ~> kg m-3 degC-1].
+                ! density in the mixed layer with temperature [R C-1 ~> kg m-3 degC-1].
     dR0_dS, &   !   Partial derivative of the mixed layer potential density with
-                ! salinity [R ppt-1 ~> kg m-3 ppt-1].
+                ! salinity [R S-1 ~> kg m-3 ppt-1].
     dRcv_dS, &  !   Partial derivative of the coordinate variable potential
-                ! density in the mixed layer with salinity [R ppt-1 ~> kg m-3 ppt-1].
+                ! density in the mixed layer with salinity [R S-1 ~> kg m-3 ppt-1].
     TKE_river   ! The source of turbulent kinetic energy available for mixing
                 ! at rivermouths [Z L2 T-3 ~> m3 s-3].
 
   real, dimension(max(CS%nsw,1),SZI_(G)) :: &
     Pen_SW_bnd  !   The penetrating fraction of the shortwave heating integrated
-                ! over a time step in each band [degC H ~> degC m or degC kg m-2].
+                ! over a time step in each band [C H ~> degC m or degC kg m-2].
   real, dimension(max(CS%nsw,1),SZI_(G),SZK_(GV)) :: &
     opacity_band ! The opacity in each band [H-1 ~> m-1 or m2 kg-1]. The indicies are band, i, k.
 
@@ -330,12 +299,12 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
                 ! adjustment [Z L2 T-2 ~> m3 s-2].
   real, dimension(SZI_(G),SZJ_(G)) :: &
     Hsfc_max, & ! The thickness of the surface region (mixed and buffer layers)
-                ! after entrainment but before any buffer layer detrainment [Z ~> m].
+                ! after entrainment but before any buffer layer detrainment [H ~> m or kg m-2].
     Hsfc_used, & ! The thickness of the surface region after buffer layer
-                ! detrainment [Z ~> m].
+                ! detrainment [H ~> m or kg m-2].
     Hsfc_min, & ! The minimum thickness of the surface region based on the
                 ! new mixed layer depth and the previous thickness of the
-                ! neighboring water columns [Z ~> m].
+                ! neighboring water columns [H ~> m or kg m-2].
     h_sum, &    ! The total thickness of the water column [H ~> m or kg m-2].
     hmbl_prev   ! The previous thickness of the mixed and buffer layers [H ~> m or kg m-2].
   real, dimension(SZI_(G)) :: &
@@ -352,12 +321,12 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
   logical :: write_diags  ! If true, write out diagnostics with this step.
   logical :: reset_diags  ! If true, zero out the accumulated diagnostics.
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
-  integer :: i, j, k, is, ie, js, je, nz, nkmb, n
+  integer :: i, j, k, is, ie, js, je, nz, nkmb
   integer :: nsw    ! The number of bands of penetrating shortwave radiation.
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
-  if (.not. associated(CS)) call MOM_error(FATAL, "MOM_mixed_layer: "//&
+  if (.not. CS%initialized) call MOM_error(FATAL, "MOM_bulk_mixed_layer: "//&
          "Module must be initialized before it is used.")
   if (GV%nkml < 1) return
 
@@ -455,13 +424,12 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       eps(i,k) = 0.0 ; if (k > nkmb) eps(i,k) = GV%Angstrom_H
       T(i,k) = tv%T(i,j,k) ; S(i,k) = tv%S(i,j,k)
     enddo ; enddo
-    if (nsw>0) call extract_optics_slice(optics, j, G, GV, opacity=opacity_band, opacity_scale=GV%H_to_m)
+    if (nsw>0) call extract_optics_slice(optics, j, G, GV, opacity=opacity_band, opacity_scale=GV%H_to_Z)
 
     do k=1,nz ; do i=is,ie
       d_ea(i,k) = 0.0 ; d_eb(i,k) = 0.0
     enddo ; enddo
 
-    if (id_clock_EOS>0) call cpu_clock_begin(id_clock_EOS)
     ! Calculate an estimate of the mid-mixed layer pressure [R L2 T-2 ~> Pa]
     if (associated(tv%p_surf)) then
       do i=is,ie ; p_ref(i) = tv%p_surf(i,j) ; enddo
@@ -477,29 +445,22 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       call calculate_density(T(:,k), S(:,k), p_ref, R0(:,k), tv%eqn_of_state, EOSdom)
       call calculate_density(T(:,k), S(:,k), p_ref_cv, Rcv(:,k), tv%eqn_of_state, EOSdom)
     enddo
-    if (id_clock_EOS>0) call cpu_clock_end(id_clock_EOS)
 
     if (CS%ML_resort) then
-      if (id_clock_resort>0) call cpu_clock_begin(id_clock_resort)
       if (CS%ML_presort_nz_conv_adj > 0) &
-        call convective_adjustment(h(:,1:), u, v, R0(:,1:), Rcv(:,1:), T(:,1:), &
-                                   S(:,1:), eps, d_eb, dKE_CA, cTKE, j, G, GV, US, CS, &
-                                   CS%ML_presort_nz_conv_adj)
+        call convective_adjustment(h, u, v, R0, Rcv, T, S, eps, d_eb, dKE_CA, cTKE, j, G, GV, &
+                                   US, CS, CS%ML_presort_nz_conv_adj)
 
-      call sort_ML(h(:,1:), R0(:,1:), eps, G, GV, CS, ksort)
-      if (id_clock_resort>0) call cpu_clock_end(id_clock_resort)
+      call sort_ML(h, R0, eps, G, GV, CS, ksort)
     else
       do k=1,nz ; do i=is,ie ; ksort(i,k) = k ; enddo ; enddo
 
-      if (id_clock_adjustment>0) call cpu_clock_begin(id_clock_adjustment)
       !  Undergo instantaneous entrainment into the buffer layers and mixed layers
       ! to remove hydrostatic instabilities.  Any water that is lighter than
       ! currently in the mixed or buffer layer is entrained.
-      call convective_adjustment(h(:,1:), u, v, R0(:,1:), Rcv(:,1:), T(:,1:), &
-                                 S(:,1:), eps, d_eb, dKE_CA, cTKE, j, G, GV, US, CS)
+      call convective_adjustment(h, u, v, R0, Rcv, T, S, eps, d_eb, dKE_CA, cTKE, j, G, GV, US, CS)
       do i=is,ie ; h_CA(i) = h(i,1) ; enddo
 
-      if (id_clock_adjustment>0) call cpu_clock_end(id_clock_adjustment)
     endif
 
     if (associated(fluxes%lrunoff) .and. CS%do_rivermix) then
@@ -507,9 +468,9 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       ! Here we add an additional source of TKE to the mixed layer where river
       ! is present to simulate unresolved estuaries. The TKE input is diagnosed
       ! as follows:
-      !   TKE_river[m3 s-3] = 0.5*rivermix_depth*g*Irho0*drho_ds*
+      !   TKE_river[Z L2 T-3 ~> m3 s-3] = 0.5*rivermix_depth * g * Irho0**2 * drho_ds *
       !                       River*(Samb - Sriver) = CS%mstar*U_star^3
-      ! where River is in units of [m s-1].
+      ! where River is in units of [R Z T-1 ~> kg m-2 s-1].
       ! Samb = Ambient salinity at the mouth of the estuary
       ! rivermix_depth =  The prescribed depth over which to mix river inflow
       ! drho_ds = The gradient of density wrt salt at the ambient surface salinity.
@@ -523,48 +484,38 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       do i=is,ie ; TKE_river(i) = 0.0 ; enddo
     endif
 
-
-    if (id_clock_conv>0) call cpu_clock_begin(id_clock_conv)
-
     ! The surface forcing is contained in the fluxes type.
     ! We aggregate the thermodynamic forcing for a time step into the following:
     ! netMassInOut = water [H ~> m or kg m-2] added/removed via surface fluxes
     ! netMassOut   = water [H ~> m or kg m-2] removed via evaporating surface fluxes
-    ! net_heat     = heat via surface fluxes [degC H ~> degC m or degC kg m-2]
-    ! net_salt     = salt via surface fluxes [ppt H ~> dppt m or gSalt m-2]
+    ! net_heat     = heat via surface fluxes [C H ~> degC m or degC kg m-2]
+    ! net_salt     = salt via surface fluxes [S H ~> ppt m or gSalt m-2]
     ! Pen_SW_bnd   = components to penetrative shortwave radiation
     call extractFluxes1d(G, GV, US, fluxes, optics, nsw, j, dt, &
                   CS%H_limit_fluxes, CS%use_river_heat_content, CS%use_calving_heat_content, &
-                  h(:,1:), T(:,1:), netMassInOut, netMassOut, Net_heat, Net_salt, Pen_SW_bnd,&
+                  h(:,1:), T(:,1:), netMassInOut, netMassOut, Net_heat, Net_salt, Pen_SW_bnd, &
                   tv, aggregate_FW_forcing)
 
     ! This subroutine causes the mixed layer to entrain to depth of free convection.
-    call mixedlayer_convection(h(:,1:), d_eb, htot, Ttot, Stot, uhtot, vhtot, &
-                               R0_tot, Rcv_tot, u, v, T(:,1:), S(:,1:),       &
-                               R0(:,1:), Rcv(:,1:), eps,                      &
-                               dR0_dT, dRcv_dT, dR0_dS, dRcv_dS,              &
-                               netMassInOut, netMassOut, Net_heat, Net_salt,  &
-                               nsw, Pen_SW_bnd, opacity_band, Conv_En,        &
-                               dKE_FC, j, ksort, G, GV, US, CS, tv, fluxes, dt, &
-                               aggregate_FW_forcing)
-
-    if (id_clock_conv>0) call cpu_clock_end(id_clock_conv)
+    call mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, R0_tot, Rcv_tot, &
+                               u, v, T, S, R0, Rcv, eps, dR0_dT, dRcv_dT, dR0_dS, dRcv_dS, &
+                               netMassInOut, netMassOut, Net_heat, Net_salt, &
+                               nsw, Pen_SW_bnd, opacity_band, Conv_En, dKE_FC, &
+                               j, ksort, G, GV, US, CS, tv, fluxes, dt, aggregate_FW_forcing)
 
     !   Now the mixed layer undergoes mechanically forced entrainment.
     ! The mixed layer may entrain down to the Monin-Obukhov depth if the
-    ! surface is becoming lighter, and is effecti1336vely detraining.
+    ! surface is becoming lighter, and is effectively detraining.
 
     !    First the TKE at the depth of free convection that is available
     !  to drive mixing is calculated.
-    if (id_clock_mech>0) call cpu_clock_begin(id_clock_mech)
-
     call find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, &
                            TKE, TKE_river, Idecay_len_TKE, cMKE, dt, Idt_diag, &
                            j, ksort, G, GV, US, CS)
 
     ! Here the mechanically driven entrainment occurs.
-    call mechanical_entrainment(h(:,1:), d_eb, htot, Ttot, Stot, uhtot, vhtot, &
-                                R0_tot, Rcv_tot, u, v, T(:,1:), S(:,1:), R0(:,1:), Rcv(:,1:), eps, dR0_dT, dRcv_dT, &
+    call mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
+                                R0_tot, Rcv_tot, u, v, T, S, R0, Rcv, eps, dR0_dT, dRcv_dT, &
                                 cMKE, Idt_diag, nsw, Pen_SW_bnd, opacity_band, TKE, &
                                 Idecay_len_TKE, j, ksort, G, GV, US, CS)
 
@@ -575,7 +526,6 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
     if (CS%TKE_diagnostics) then ; do i=is,ie
       CS%diag_TKE_mech_decay(i,j) = CS%diag_TKE_mech_decay(i,j) - Idt_diag * TKE(i)
     enddo ; endif
-    if (id_clock_mech>0) call cpu_clock_end(id_clock_mech)
 
     ! Calculate the homogeneous mixed layer properties and store them in layer 0.
     do i=is,ie ; if (htot(i) > 0.0) then
@@ -588,7 +538,7 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       h(i,0) = htot(i)
     endif ; enddo
     if (write_diags .and. allocated(CS%ML_depth)) then ; do i=is,ie
-      CS%ML_depth(i,j) = h(i,0) * GV%H_to_m  ! Rescale the diagnostic.
+      CS%ML_depth(i,j) = h(i,0)  ! Store the diagnostic.
     enddo ; endif
     if (associated(Hml)) then ; do i=is,ie
       Hml(i,j) = G%mask2dT(i,j) * (h(i,0) * GV%H_to_Z) ! Rescale the diagnostic for output.
@@ -605,10 +555,8 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
 ! these unused layers (but not currently in the code).
 
     if (CS%ML_resort) then
-      if (id_clock_resort>0) call cpu_clock_begin(id_clock_resort)
       call resort_ML(h(:,0:), T(:,0:), S(:,0:), R0(:,0:), Rcv(:,0:), GV%Rlay(:), eps, &
                      d_ea, d_eb, ksort, G, GV, CS, dR0_dT, dR0_dS, dRcv_dT, dRcv_dS)
-      if (id_clock_resort>0) call cpu_clock_end(id_clock_resort)
     endif
 
     if (CS%limit_det .or. (CS%id_Hsfc_max > 0) .or. (CS%id_Hsfc_min > 0)) then
@@ -625,21 +573,20 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
                           hmbl_prev(i,j-1) - dHD*min(h_sum(i,j),h_sum(i,j-1)), &
                           hmbl_prev(i,j+1) - dHD*min(h_sum(i,j),h_sum(i,j+1))) )
 
-          Hsfc_min(i,j) = GV%H_to_Z * max(h(i,0), min(Hsfc(i), H_nbr))
+          Hsfc_min(i,j) = max(h(i,0), min(Hsfc(i), H_nbr))
 
           if (CS%limit_det) max_BL_det(i) = max(0.0, Hsfc(i)-H_nbr)
         enddo
       endif
 
       if (CS%id_Hsfc_max > 0) then ; do i=is,ie
-        Hsfc_max(i,j) = GV%H_to_Z * Hsfc(i)
+        Hsfc_max(i,j) = Hsfc(i)
       enddo ; endif
     endif
 
 ! Move water left in the former mixed layer into the buffer layer and
 ! from the buffer layer into the interior.  These steps might best be
 ! treated in conjuction.
-    if (id_clock_detrain>0) call cpu_clock_begin(id_clock_detrain)
     if (CS%nkbl == 1) then
       call mixedlayer_detrain_1(h(:,0:), T(:,0:), S(:,0:), R0(:,0:), Rcv(:,0:), &
                                 GV%Rlay(:), dt, dt__diag, d_ea, d_eb, j, G, GV, US, CS, &
@@ -652,13 +599,11 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
       ! This code only works with 1 or 2 buffer layers.
       call MOM_error(FATAL, "MOM_mixed_layer: CS%nkbl must be 1 or 2 for now.")
     endif
-    if (id_clock_detrain>0) call cpu_clock_end(id_clock_detrain)
-
 
     if (CS%id_Hsfc_used > 0) then
-      do i=is,ie ; Hsfc_used(i,j) = GV%H_to_Z * h(i,0) ; enddo
+      do i=is,ie ; Hsfc_used(i,j) = h(i,0) ; enddo
       do k=CS%nkml+1,nkmb ; do i=is,ie
-        Hsfc_used(i,j) = Hsfc_used(i,j) + GV%H_to_Z * h(i,k)
+        Hsfc_used(i,j) = Hsfc_used(i,j) + h(i,k)
       enddo ; enddo
     endif
 
@@ -741,15 +686,15 @@ subroutine bulkmixedlayer(h_3d, u_3d, v_3d, tv, fluxes, dt, ea, eb, G, GV, US, C
 
     if (CS%id_h_mismatch > 0) then
       do i=is,ie
-        h_miss(i,j) = GV%H_to_Z * abs(h_3d(i,j,1) - (h_orig(i,1) + &
+        h_miss(i,j) = abs(h_3d(i,j,1) - (h_orig(i,1) + &
           (eaml(i,1) + (ebml(i,1) - eaml(i,1+1)))))
       enddo
       do k=2,nz-1 ; do i=is,ie
-        h_miss(i,j) = h_miss(i,j) + GV%H_to_Z * abs(h_3d(i,j,k) - (h_orig(i,k) + &
+        h_miss(i,j) = h_miss(i,j) + abs(h_3d(i,j,k) - (h_orig(i,k) + &
           ((eaml(i,k) - ebml(i,k-1)) + (ebml(i,k) - eaml(i,k+1)))))
       enddo ; enddo
       do i=is,ie
-        h_miss(i,j) = h_miss(i,j) + GV%H_to_Z * abs(h_3d(i,j,nz) - (h_orig(i,nz) + &
+        h_miss(i,j) = h_miss(i,j) + abs(h_3d(i,j,nz) - (h_orig(i,nz) + &
           ((eaml(i,nz) - ebml(i,nz-1)) + ebml(i,nz))))
       enddo
     endif
@@ -803,59 +748,53 @@ end subroutine bulkmixedlayer
 !! is lighter than currently in the mixed- or buffer- layer is entrained.
 subroutine convective_adjustment(h, u, v, R0, Rcv, T, S, eps, d_eb, &
                                  dKE_CA, cTKE, j, G, GV, US, CS, nz_conv)
-  type(ocean_grid_type),             intent(in)    :: G    !< The ocean's grid structure.
-  type(verticalGrid_type),           intent(in)    :: GV   !< The ocean's vertical grid structure.
-  real, dimension(SZI_(G),SZK_(GV)), intent(inout) :: h    !< Layer thickness [H ~> m or kg m-2].
+  type(ocean_grid_type),              intent(in)    :: G   !< The ocean's grid structure.
+  type(verticalGrid_type),            intent(in)    :: GV  !< The ocean's vertical grid structure.
+  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: h   !< Layer thickness [H ~> m or kg m-2].
                                                            !! The units of h are referred to as H below.
-  real, dimension(SZI_(G),SZK_(GV)), intent(inout) :: u    !< Zonal velocities interpolated to h
+  real, dimension(SZI_(G),SZK_(GV)),  intent(inout) :: u   !< Zonal velocities interpolated to h
                                                            !! points [L T-1 ~> m s-1].
-  real, dimension(SZI_(G),SZK_(GV)), intent(inout) :: v    !< Zonal velocities interpolated to h
+  real, dimension(SZI_(G),SZK_(GV)),  intent(inout) :: v   !< Zonal velocities interpolated to h
                                                            !! points [L T-1 ~> m s-1].
-  real, dimension(SZI_(G),SZK_(GV)), intent(inout) :: T    !< Layer temperatures [degC].
-  real, dimension(SZI_(G),SZK_(GV)), intent(inout) :: S    !< Layer salinities [ppt].
-  real, dimension(SZI_(G),SZK_(GV)), intent(inout) :: R0   !< Potential density referenced to
+  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: R0  !< Potential density referenced to
                                                            !! surface pressure [R ~> kg m-3].
-  real, dimension(SZI_(G),SZK_(GV)), intent(inout) :: Rcv  !< The coordinate defining potential
+  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: Rcv !< The coordinate defining potential
                                                            !! density [R ~> kg m-3].
-  real, dimension(SZI_(G),SZK_(GV)), intent(inout) :: d_eb !< The downward increase across a layer
+  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: T   !< Layer temperatures [C ~> degC].
+  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: S   !< Layer salinities [S ~> ppt].
+  real, dimension(SZI_(G),SZK_(GV)),  intent(in)    :: eps !< The negligibly small amount of water
+                                                           !! that will be left in each layer [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZK_(GV)),  intent(inout) :: d_eb !< The downward increase across a layer
                                                            !! in the entrainment from below [H ~> m or kg m-2].
                                                            !! Positive values go with mass gain by
                                                            !! a layer.
-  real, dimension(SZI_(G),SZK_(GV)), intent(in)    :: eps  !< The negligibly small amount of water
-                                                           !! that will be left in each layer [H ~> m or kg m-2].
-  real, dimension(SZI_(G),SZK_(GV)), intent(out)   :: dKE_CA !< The vertically integrated change in
+  real, dimension(SZI_(G),SZK_(GV)),  intent(out)   :: dKE_CA !< The vertically integrated change in
                                                            !! kinetic energy due to convective
                                                            !! adjustment [Z L2 T-2 ~> m3 s-2].
-  real, dimension(SZI_(G),SZK_(GV)), intent(out)   :: cTKE !< The buoyant turbulent kinetic energy
+  real, dimension(SZI_(G),SZK_(GV)),  intent(out)   :: cTKE !< The buoyant turbulent kinetic energy
                                                            !! source due to convective adjustment
                                                            !! [Z L2 T-2 ~> m3 s-2].
-  integer,                           intent(in)    :: j    !< The j-index to work on.
-  type(unit_scale_type),             intent(in)    :: US   !< A dimensional unit scaling type
-  type(bulkmixedlayer_CS),           pointer       :: CS   !< The control structure for this module.
-  integer,                 optional, intent(in)    :: nz_conv !< If present, the number of layers
+  integer,                            intent(in)    :: j   !< The j-index to work on.
+  type(unit_scale_type),              intent(in)    :: US  !< A dimensional unit scaling type
+  type(bulkmixedlayer_CS),            intent(in)    :: CS  !< Bulk mixed layer control struct
+  integer,                  optional, intent(in)    :: nz_conv !< If present, the number of layers
                                                            !! over which to do convective adjustment
                                                            !! (perhaps CS%nkml).
 
-!   This subroutine does instantaneous convective entrainment into the buffer
-! layers and mixed layers to remove hydrostatic instabilities.  Any water that
-! is lighter than currently in the mixed- or buffer- layer is entrained.
-
   ! Local variables
   real, dimension(SZI_(G)) :: &
-    htot, &     !   The total depth of the layers being considered for
-                ! entrainment [H ~> m or kg m-2].
     R0_tot, &   !   The integrated potential density referenced to the surface
                 ! of the layers which are fully entrained [H R ~> kg m-2 or kg2 m-5].
     Rcv_tot, &  !   The integrated coordinate value potential density of the
                 ! layers that are fully entrained [H R ~> kg m-2 or kg2 m-5].
     Ttot, &     !   The integrated temperature of layers which are fully
-                ! entrained [degC H ~> degC m or degC kg m-2].
+                ! entrained [C H ~> degC m or degC kg m-2].
     Stot, &     !   The integrated salt of layers which are fully entrained
-                ! [H ppt ~> m ppt or ppt kg m-2].
+                ! [H S ~> m ppt or ppt kg m-2].
     uhtot, &    !   The depth integrated zonal and meridional velocities in
     vhtot, &    ! the mixed layer [H L T-1 ~> m2 s-1 or kg m-1 s-1].
-    KE_orig, &  !   The total mean kinetic energy in the mixed layer before
-                ! convection, [H L2 T-2 ~> H m2 s-2].
+    KE_orig, &  !   The total mean kinetic energy per unit area in the mixed layer before
+                ! convection, [H L2 T-2 ~> m3 s-2 or kg s-2].
     h_orig_k1   !   The depth of layer k1 before convective adjustment [H ~> m or kg m-2].
   real :: h_ent !   The thickness from a layer that is entrained [H ~> m or kg m-2].
   real :: Ih    !   The inverse of a thickness [H-1 ~> m-1 or m2 kg-1].
@@ -942,7 +881,7 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
                                  aggregate_FW_forcing)
   type(ocean_grid_type),    intent(in)    :: G     !< The ocean's grid structure.
   type(verticalGrid_type),  intent(in)    :: GV    !< The ocean's vertical grid structure.
-  real, dimension(SZI_(G),SZK_(GV)), &
+  real, dimension(SZI_(G),SZK0_(GV)), &
                             intent(inout) :: h     !< Layer thickness [H ~> m or kg m-2].
                                                    !! The units of h are referred to as H below.
   real, dimension(SZI_(G),SZK_(GV)), &
@@ -951,9 +890,9 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
                                                    !! Positive values go with mass gain by a layer.
   real, dimension(SZI_(G)), intent(out)   :: htot  !< The accumulated mixed layer thickness [H ~> m or kg m-2].
   real, dimension(SZI_(G)), intent(out)   :: Ttot  !< The depth integrated mixed layer temperature
-                                                   !! [degC H ~> degC m or degC kg m-2].
+                                                   !! [C H ~> degC m or degC kg m-2].
   real, dimension(SZI_(G)), intent(out)   :: Stot  !< The depth integrated mixed layer salinity
-                                                   !! [ppt H ~> ppt m or ppt kg m-2].
+                                                   !! [S H ~> ppt m or ppt kg m-2].
   real, dimension(SZI_(G)), intent(out)   :: uhtot !< The depth integrated mixed layer zonal
                                                    !! velocity [H L T-1 ~> m2 s-1 or kg m-1 s-1].
   real, dimension(SZI_(G)), intent(out)   :: vhtot !< The integrated mixed layer meridional
@@ -966,42 +905,42 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
                             intent(in)    :: u     !< Zonal velocities interpolated to h points [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZK_(GV)), &
                             intent(in)    :: v     !< Zonal velocities interpolated to h points [L T-1 ~> m s-1].
-  real, dimension(SZI_(G),SZK_(GV)), &
-                            intent(in)    :: T     !< Layer temperatures [degC].
-  real, dimension(SZI_(G),SZK_(GV)), &
-                            intent(in)    :: S     !< Layer salinities [ppt].
-  real, dimension(SZI_(G),SZK_(GV)), &
+  real, dimension(SZI_(G),SZK0_(GV)), &
+                            intent(in)    :: T     !< Layer temperatures [C ~> degC].
+  real, dimension(SZI_(G),SZK0_(GV)), &
+                            intent(in)    :: S     !< Layer salinities [C ~> ppt].
+  real, dimension(SZI_(G),SZK0_(GV)), &
                             intent(in)    :: R0    !< Potential density referenced to
                                                    !! surface pressure [R ~> kg m-3].
-  real, dimension(SZI_(G),SZK_(GV)), &
+  real, dimension(SZI_(G),SZK0_(GV)), &
                             intent(in)    :: Rcv   !< The coordinate defining potential
                                                    !! density [R ~> kg m-3].
   real, dimension(SZI_(G),SZK_(GV)), &
                             intent(in)    :: eps   !< The negligibly small amount of water
                                                    !! that will be left in each layer [H ~> m or kg m-2].
   real, dimension(SZI_(G)), intent(in)    :: dR0_dT  !< The partial derivative of R0 with respect to
-                                                   !! temperature [R degC-1 ~> kg m-3 degC-1].
+                                                   !! temperature [R C-1 ~> kg m-3 degC-1].
   real, dimension(SZI_(G)), intent(in)    :: dRcv_dT !< The partial derivative of Rcv with respect to
-                                                   !! temperature [R degC-1 ~> kg m-3 degC-1].
+                                                   !! temperature [R C-1 ~> kg m-3 degC-1].
   real, dimension(SZI_(G)), intent(in)    :: dR0_dS  !< The partial derivative of R0 with respect to
-                                                   !! salinity [R ppt-1 ~> kg m-3 ppt-1].
+                                                   !! salinity [R S-1 ~> kg m-3 ppt-1].
   real, dimension(SZI_(G)), intent(in)    :: dRcv_dS !< The partial derivative of Rcv with respect to
-                                                   !! salinity [R ppt-1 ~> kg m-3 ppt-1].
+                                                   !! salinity [R S-1 ~> kg m-3 ppt-1].
   real, dimension(SZI_(G)), intent(in)    :: netMassInOut !< The net mass flux (if non-Boussinesq)
                                                    !! or volume flux (if Boussinesq) into the ocean
                                                    !! within a time step [H ~> m or kg m-2]. (I.e. P+R-E.)
   real, dimension(SZI_(G)), intent(in)    :: netMassOut !< The mass or volume flux out of the ocean
                                                    !! within a time step [H ~> m or kg m-2].
   real, dimension(SZI_(G)), intent(in)    :: Net_heat !< The net heating at the surface over a time
-                                                   !! step [degC H ~> degC m or degC kg m-2].  Any penetrating
+                                                   !! step [C H ~> degC m or degC kg m-2].  Any penetrating
                                                    !! shortwave radiation is not included in Net_heat.
   real, dimension(SZI_(G)), intent(in)    :: Net_salt !< The net surface salt flux into the ocean
-                                                   !! over a time step [ppt H ~> ppt m or ppt kg m-2].
+                                                   !! over a time step [S H ~> ppt m or ppt kg m-2].
   integer,                  intent(in)    :: nsw   !< The number of bands of penetrating
                                                    !! shortwave radiation.
   real, dimension(max(nsw,1),SZI_(G)), intent(inout) :: Pen_SW_bnd !< The penetrating shortwave
                                                    !! heating at the sea surface in each penetrating
-                                                   !! band [degC H ~> degC m or degC kg m-2].
+                                                   !! band [C H ~> degC m or degC kg m-2].
   real, dimension(max(nsw,1),SZI_(G),SZK_(GV)), intent(in) :: opacity_band !< The opacity in each band of
                                                    !! penetrating shortwave radiation [H-1 ~> m-1 or m2 kg-1].
   real, dimension(SZI_(G)), intent(out)   :: Conv_En !< The buoyant turbulent kinetic energy source
@@ -1012,7 +951,7 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
   integer, dimension(SZI_(G),SZK_(GV)), &
                             intent(in)    :: ksort !< The density-sorted k-indices.
   type(unit_scale_type),    intent(in)    :: US    !< A dimensional unit scaling type
-  type(bulkmixedlayer_CS),  pointer       :: CS    !< The control structure for this module.
+  type(bulkmixedlayer_CS),  intent(in)    :: CS    !< Bulk mixed layer control struct
   type(thermo_var_ptrs),    intent(inout) :: tv    !< A structure containing pointers to any
                                                    !! available thermodynamic fields. Absent
                                                    !! fields have NULL ptrs.
@@ -1036,11 +975,11 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
   real :: SW_trans     !   The fraction of shortwave radiation
                        ! that is not absorbed in a layer [nondim].
   real :: Pen_absorbed !   The amount of penetrative shortwave radiation
-                       ! that is absorbed in a layer [degC H ~> degC m or degC kg m-2].
+                       ! that is absorbed in a layer [C H ~> degC m or degC kg m-2].
   real :: h_avail      !   The thickness in a layer available for
                        ! entrainment [H ~> m or kg m-2].
   real :: h_ent        !   The thickness from a layer that is entrained [H ~> m or kg m-2].
-  real :: T_precip     !   The temperature of the precipitation [degC].
+  real :: T_precip     !   The temperature of the precipitation [C ~> degC].
   real :: C1_3, C1_6   !  1/3 and 1/6.
   real :: En_fn, Frac, x1 !  Nondimensional temporary variables.
   real :: dr, dr0      ! Temporary variables [R H ~> kg m-2 or kg2 m-5].
@@ -1060,7 +999,6 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
                        ! shortwave radiation, integrated over a layer
                        ! [H R ~> kg m-2 or kg2 m-5].
   real :: Idt          ! 1.0/dt [T-1 ~> s-1]
-  real :: netHeatOut   ! accumulated heat content of mass leaving ocean
   integer :: is, ie, nz, i, k, ks, itt, n
   real, dimension(max(nsw,1)) :: &
     C2, &              ! Temporary variable R H-1 ~> kg m-4 or m-1].
@@ -1123,7 +1061,7 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
     Conv_En(i) = 0.0 ; dKE_FC(i) = 0.0
     if (associated(fluxes%heat_content_massin)) &
       fluxes%heat_content_massin(i,j) = fluxes%heat_content_massin(i,j) + &
-                         T_precip * netMassIn(i) * GV%H_to_RZ * fluxes%C_p * Idt
+                         T_precip * netMassIn(i) * GV%H_to_RZ * tv%C_p * Idt
     if (associated(tv%TempxPmE)) tv%TempxPmE(i,j) = tv%TempxPmE(i,j) + &
                          T_precip * netMassIn(i) * GV%H_to_RZ
   else  ! This is a massless column, but zero out the summed variables anyway for safety.
@@ -1174,12 +1112,12 @@ subroutine mixedlayer_convection(h, d_eb, htot, Ttot, Stot, uhtot, vhtot,      &
         d_eb(i,k) = d_eb(i,k) - h_evap
 
         ! smg: when resolve the A=B code, we will set
-        ! heat_content_massout = heat_content_massout - T(i,k)*h_evap*GV%H_to_RZ*fluxes%C_p*Idt
+        ! heat_content_massout = heat_content_massout - T(i,k)*h_evap*GV%H_to_RZ*tv%C_p*Idt
         ! by uncommenting the lines here.
         ! we will also then completely remove TempXpme from the model.
         if (associated(fluxes%heat_content_massout)) &
           fluxes%heat_content_massout(i,j) = fluxes%heat_content_massout(i,j) - &
-                                      T(i,k)*h_evap*GV%H_to_RZ * fluxes%C_p * Idt
+                                      T(i,k)*h_evap*GV%H_to_RZ * tv%C_p * Idt
         if (associated(tv%TempxPmE)) tv%TempxPmE(i,j) = tv%TempxPmE(i,j) - &
                                       T(i,k)*h_evap*GV%H_to_RZ
 
@@ -1337,7 +1275,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
                                                        !! kinetic energy due to convective
                                                        !! adjustment [Z L2 T-2 ~> m3 s-2].
   real, dimension(SZI_(G)),   intent(out)   :: TKE     !< The turbulent kinetic energy available for
-                                                       !! mixing over a time step [Z m2 T-2 ~> m3 s-2].
+                                                       !! mixing over a time step [Z L2 T-2 ~> m3 s-2].
   real, dimension(SZI_(G)),   intent(out)   :: Idecay_len_TKE !< The inverse of the vertical decay
                                                        !! scale for TKE [H-1 ~> m-1 or m2 kg-1].
   real, dimension(SZI_(G)),   intent(in)    :: TKE_river !< The source of turbulent kinetic energy
@@ -1352,7 +1290,7 @@ subroutine find_starting_TKE(htot, h_CA, fluxes, Conv_En, cTKE, dKE_FC, dKE_CA, 
   integer,                    intent(in)    :: j       !< The j-index to work on.
   integer, dimension(SZI_(G),SZK_(GV)), &
                               intent(in)    :: ksort   !< The density-sorted k-indicies.
-  type(bulkmixedlayer_CS),    pointer       :: CS      !< The control structure for this module.
+  type(bulkmixedlayer_CS),    intent(inout) :: CS      !< Bulk mixed layer control struct
 
 !   This subroutine determines the TKE available at the depth of free
 ! convection to drive mechanical entrainment.
@@ -1503,7 +1441,7 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
   type(ocean_grid_type),    intent(in)    :: G     !< The ocean's grid structure.
   type(verticalGrid_type),  intent(in)    :: GV    !< The ocean's vertical grid structure.
   type(unit_scale_type),    intent(in)    :: US    !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZK_(GV)), &
+  real, dimension(SZI_(G),SZK0_(GV)), &
                             intent(inout) :: h     !< Layer thickness [H ~> m or kg m-2].
   real, dimension(SZI_(G),SZK_(GV)), &
                             intent(inout) :: d_eb  !< The downward increase across a layer in the
@@ -1511,9 +1449,9 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
                                                    !! Positive values go with mass gain by a layer.
   real, dimension(SZI_(G)), intent(inout) :: htot  !< The accumlated mixed layer thickness [H ~> m or kg m-2].
   real, dimension(SZI_(G)), intent(inout) :: Ttot  !< The depth integrated mixed layer temperature
-                                                   !! [degC H ~> degC m or degC kg m-2].
+                                                   !! [C H ~> degC m or degC kg m-2].
   real, dimension(SZI_(G)), intent(inout) :: Stot  !< The depth integrated mixed layer salinity
-                                                   !! [ppt H ~> ppt m or ppt kg m-2].
+                                                   !! [S H ~> ppt m or ppt kg m-2].
   real, dimension(SZI_(G)), intent(inout) :: uhtot !< The depth integrated mixed layer zonal
                                                    !! velocity [H L T-1 ~> m2 s-1 or kg m-1 s-1].
   real, dimension(SZI_(G)), intent(inout) :: vhtot !< The integrated mixed layer meridional
@@ -1526,23 +1464,23 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
                             intent(in)    :: u     !< Zonal velocities interpolated to h points [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZK_(GV)), &
                             intent(in)    :: v     !< Zonal velocities interpolated to h points [L T-1 ~> m s-1].
-  real, dimension(SZI_(G),SZK_(GV)), &
-                            intent(in)    :: T     !< Layer temperatures [degC].
-  real, dimension(SZI_(G),SZK_(GV)), &
-                            intent(in)    :: S     !< Layer salinities [ppt].
-  real, dimension(SZI_(G),SZK_(GV)), &
+  real, dimension(SZI_(G),SZK0_(GV)), &
+                            intent(in)    :: T     !< Layer temperatures [C ~> degC].
+  real, dimension(SZI_(G),SZK0_(GV)), &
+                            intent(in)    :: S     !< Layer salinities [S ~> ppt].
+  real, dimension(SZI_(G),SZK0_(GV)), &
                             intent(in)    :: R0    !< Potential density referenced to
                                                    !! surface pressure [R ~> kg m-3].
-  real, dimension(SZI_(G),SZK_(GV)), &
+  real, dimension(SZI_(G),SZK0_(GV)), &
                             intent(in)    :: Rcv   !< The coordinate defining potential
                                                    !! density [R ~> kg m-3].
   real, dimension(SZI_(G),SZK_(GV)), &
                             intent(in)    :: eps   !< The negligibly small amount of water
                                                    !! that will be left in each layer [H ~> m or kg m-2].
   real, dimension(SZI_(G)), intent(in)    :: dR0_dT  !< The partial derivative of R0 with respect to
-                                                   !! temperature [R degC-1 ~> kg m-3 degC-1].
+                                                   !! temperature [R C-1 ~> kg m-3 degC-1].
   real, dimension(SZI_(G)), intent(in)    :: dRcv_dT !< The partial derivative of Rcv with respect to
-                                                   !! temperature [R degC-1 ~> kg m-3 degC-1].
+                                                   !! temperature [R C-1 ~> kg m-3 degC-1].
   real, dimension(2,SZI_(G)), intent(in)  :: cMKE  !< Coefficients of HpE and HpE^2 used in calculating the
                                                    !! denominator of MKE_rate; the two elements have differing
                                                    !! units of [H-1 ~> m-1 or m2 kg-1] and [H-2 ~> m-2 or m4 kg-2].
@@ -1552,17 +1490,17 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
                                                    !! shortwave radiation.
   real, dimension(max(nsw,1),SZI_(G)), intent(inout) :: Pen_SW_bnd !< The penetrating shortwave
                                                    !! heating at the sea surface in each penetrating
-                                                   !! band [degC H ~> degC m or degC kg m-2].
+                                                   !! band [C H ~> degC m or degC kg m-2].
   real, dimension(max(nsw,1),SZI_(G),SZK_(GV)), intent(in) :: opacity_band !< The opacity in each band of
                                                    !! penetrating shortwave radiation [H-1 ~> m-1 or m2 kg-1].
   real, dimension(SZI_(G)), intent(inout) :: TKE   !< The turbulent kinetic energy
                                                    !! available for mixing over a time
-                                                   !! step [Z m2 T-2 ~> m3 s-2].
+                                                   !! step [Z L2 T-2 ~> m3 s-2].
   real, dimension(SZI_(G)), intent(inout) :: Idecay_len_TKE !< The vertical TKE decay rate [H-1 ~> m-1 or m2 kg-1].
   integer,                  intent(in)    :: j     !< The j-index to work on.
   integer, dimension(SZI_(G),SZK_(GV)), &
                             intent(in)    :: ksort !< The density-sorted k-indicies.
-  type(bulkmixedlayer_CS),  pointer       :: CS    !< The control structure for this module.
+  type(bulkmixedlayer_CS),  intent(inout) :: CS    !< Bulk mixed layer control struct
 
 ! This subroutine calculates mechanically driven entrainment.
 
@@ -1570,7 +1508,7 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
   real :: SW_trans  !   The fraction of shortwave radiation that is not
                     ! absorbed in a layer, nondimensional.
   real :: Pen_absorbed  !   The amount of penetrative shortwave radiation
-                        ! that is absorbed in a layer [degC H ~> degC m or degC kg m-2].
+                        ! that is absorbed in a layer [C H ~> degC m or degC kg m-2].
   real :: h_avail   ! The thickness in a layer available for entrainment [H ~> m or kg m-2].
   real :: h_ent     ! The thickness from a layer that is entrained [H ~> m or kg m-2].
   real :: h_min, h_max ! Limits on the solution for h_ent [H ~> m or kg m-2].
@@ -1586,9 +1524,9 @@ subroutine mechanical_entrainment(h, d_eb, htot, Ttot, Stot, uhtot, vhtot, &
   real :: TKE_full_ent  ! The TKE remaining if a layer is fully entrained
                         ! [Z L2 T-2 ~> m3 s-2].
   real :: dRL       ! Work required to mix water from the next layer
-                    ! across the mixed layer [L2 T-2 ~> L2 s-2].
+                    ! across the mixed layer [L2 T-2 ~> m2 s-2].
   real :: Pen_En_Contrib  ! Penetrating SW contributions to the changes in
-                          ! TKE, divided by layer thickness in m [L2 T2 ~> m2 s-2].
+                          ! TKE, divided by layer thickness in m [L2 T-2 ~> m2 s-2].
   real :: Cpen1     ! A temporary variable [L2 T-2 ~> m2 s-2].
   real :: dMKE      ! A temporary variable related to the release of mean
                     ! kinetic energy [H Z L2 T-2 ~> m4 s-2 or kg m s-2]
@@ -1840,13 +1778,12 @@ end subroutine mechanical_entrainment
 subroutine sort_ML(h, R0, eps, G, GV, CS, ksort)
   type(ocean_grid_type),                intent(in)  :: G     !< The ocean's grid structure.
   type(verticalGrid_type),              intent(in)  :: GV    !< The ocean's vertical grid structure.
-  real, dimension(SZI_(G),SZK_(GV)),    intent(in)  :: h     !< Layer thickness [H ~> m or kg m-2].
-  real, dimension(SZI_(G),SZK_(GV)),    intent(in)  :: R0    !< The potential density used to sort
+  real, dimension(SZI_(G),SZK0_(GV)),   intent(in)  :: h     !< Layer thickness [H ~> m or kg m-2].
+  real, dimension(SZI_(G),SZK0_(GV)),   intent(in)  :: R0    !< The potential density used to sort
                                                              !! the layers [R ~> kg m-3].
   real, dimension(SZI_(G),SZK_(GV)),    intent(in)  :: eps   !< The (small) thickness that must
                                                              !! remain in each layer [H ~> m or kg m-2].
-  type(bulkmixedlayer_CS),              pointer     :: CS    !< The control structure returned by a
-                                                             !! previous call to mixedlayer_init.
+  type(bulkmixedlayer_CS),              intent(in)  :: CS    !< Bulk mixed layer control struct
   integer, dimension(SZI_(G),SZK_(GV)), intent(out) :: ksort !< The k-index to use in the sort.
 
   ! Local variables
@@ -1895,8 +1832,8 @@ subroutine resort_ML(h, T, S, R0, Rcv, RcvTgt, eps, d_ea, d_eb, ksort, G, GV, CS
                                                                  !! structure.
   real, dimension(SZI_(G),SZK0_(GV)),   intent(inout) :: h       !< Layer thickness [H ~> m or kg m-2].
                                                                  !! Layer 0 is the new mixed layer.
-  real, dimension(SZI_(G),SZK0_(GV)),   intent(inout) :: T       !< Layer temperatures [degC].
-  real, dimension(SZI_(G),SZK0_(GV)),   intent(inout) :: S       !< Layer salinities [ppt].
+  real, dimension(SZI_(G),SZK0_(GV)),   intent(inout) :: T       !< Layer temperatures [C ~> degC].
+  real, dimension(SZI_(G),SZK0_(GV)),   intent(inout) :: S       !< Layer salinities [S ~> ppt].
   real, dimension(SZI_(G),SZK0_(GV)),   intent(inout) :: R0      !< Potential density referenced to
                                                                  !! surface pressure [R ~> kg m-3].
   real, dimension(SZI_(G),SZK0_(GV)),   intent(inout) :: Rcv     !< The coordinate defining
@@ -1915,24 +1852,23 @@ subroutine resort_ML(h, T, S, R0, Rcv, RcvTgt, eps, d_ea, d_eb, ksort, G, GV, CS
                                                                  !! below [H ~> m or kg m-2]. Positive values go
                                                                  !! with mass gain by a layer.
   integer, dimension(SZI_(G),SZK_(GV)), intent(in)    :: ksort   !< The density-sorted k-indicies.
-  type(bulkmixedlayer_CS),              pointer       :: CS      !< The control structure for this
-                                                                 !! module.
+  type(bulkmixedlayer_CS),              intent(in)    :: CS      !< Bulk mixed layer control struct
   real, dimension(SZI_(G)),             intent(in)    :: dR0_dT  !< The partial derivative of
                                                                  !! potential density referenced
                                                                  !! to the surface with potential
-                                                                 !! temperature [R degC-1 ~> kg m-3 degC-1].
+                                                                 !! temperature [R C-1 ~> kg m-3 degC-1].
   real, dimension(SZI_(G)),             intent(in)    :: dR0_dS  !< The partial derivative of
                                                                  !! cpotential density referenced
                                                                  !! to the surface with salinity,
-                                                                 !! [R ppt-1 ~> kg m-3 ppt-1].
+                                                                 !! [R S-1 ~> kg m-3 ppt-1].
   real, dimension(SZI_(G)),             intent(in)    :: dRcv_dT !< The partial derivative of
                                                                  !! coordinate defining potential
                                                                  !! density with potential
-                                                                 !! temperature [R degC-1 ~> kg m-3 degC-1].
+                                                                 !! temperature [R C-1 ~> kg m-3 degC-1].
   real, dimension(SZI_(G)),             intent(in)    :: dRcv_dS !< The partial derivative of
                                                                  !! coordinate defining potential
                                                                  !! density with salinity,
-                                                                 !! [R ppt-1 ~> kg m-3 ppt-1].
+                                                                 !! [R S-1 ~> kg m-3 ppt-1].
 
 !   If there are no massive light layers above the deepest of the mixed- and
 ! buffer layers, do nothing (except perhaps to reshuffle these layers).
@@ -2215,8 +2151,8 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, j, 
   type(verticalGrid_type),            intent(in)    :: GV   !< The ocean's vertical grid structure.
   real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: h    !< Layer thickness [H ~> m or kg m-2].
                                                             !!  Layer 0 is the new mixed layer.
-  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: T    !< Potential temperature [degC].
-  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: S    !< Salinity [ppt].
+  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: T    !< Potential temperature [C ~> degC].
+  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: S    !< Salinity [S ~> ppt].
   real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: R0   !< Potential density referenced to
                                                             !! surface pressure [R ~> kg m-3].
   real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: Rcv  !< The coordinate defining potential
@@ -2231,23 +2167,22 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, j, 
                                                             !! goes with layer thickness increases.
   integer,                            intent(in)    :: j    !< The meridional row to work on.
   type(unit_scale_type),              intent(in)    :: US   !< A dimensional unit scaling type
-  type(bulkmixedlayer_CS),            pointer       :: CS   !< The control structure returned by a
-                                                            !! previous call to mixedlayer_init.
+  type(bulkmixedlayer_CS),            intent(inout) :: CS   !< Bulk mixed layer control struct
   real, dimension(SZI_(G)),           intent(in)    :: dR0_dT  !< The partial derivative of
                                                             !! potential density referenced to the
                                                             !! surface with potential temperature,
-                                                            !! [R degC-1 ~> kg m-3 degC-1].
+                                                            !! [R C-1 ~> kg m-3 degC-1].
   real, dimension(SZI_(G)),           intent(in)    :: dR0_dS  !< The partial derivative of
                                                             !! cpotential density referenced to the
                                                             !! surface with salinity
-                                                            !! [R ppt-1 ~> kg m-3 ppt-1].
+                                                            !! [R S-1 ~> kg m-3 ppt-1].
   real, dimension(SZI_(G)),           intent(in)    :: dRcv_dT !< The partial derivative of
                                                             !! coordinate defining potential density
                                                             !! with potential temperature,
-                                                            !! [R degC-1 ~> kg m-3 degC-1].
+                                                            !! [R C-1 ~> kg m-3 degC-1].
   real, dimension(SZI_(G)),           intent(in)    :: dRcv_dS !< The partial derivative of
                                                             !! coordinate defining potential density
-                                                            !! with salinity [R ppt-1 ~> kg m-3 ppt-1].
+                                                            !! with salinity [R S-1 ~> kg m-3 ppt-1].
   real, dimension(SZI_(G)),           intent(in)    :: max_BL_det !< If non-negative, the maximum
                                                             !! detrainment permitted from the buffer
                                                             !! layers [H ~> m or kg m-2].
@@ -2264,9 +2199,9 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, j, 
   real :: Rcv_to_bl               ! The depth integrated amount of Rcv that is detrained to the
                                   ! buffer layer [H R ~> kg m-2 or kg2 m-5]
   real :: T_to_bl                 ! The depth integrated amount of T that is detrained to the
-                                  ! buffer layer [degC H ~> degC m or degC kg m-2]
+                                  ! buffer layer [C H ~> degC m or degC kg m-2]
   real :: S_to_bl                 ! The depth integrated amount of S that is detrained to the
-                                  ! buffer layer [ppt H ~> ppt m or ppt kg m-2]
+                                  ! buffer layer [S H ~> ppt m or ppt kg m-2]
   real :: h_min_bl                ! The minimum buffer layer thickness [H ~> m or kg m-2].
 
   real :: h1, h2                  ! Scalar variables holding the values of
@@ -2313,9 +2248,9 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, j, 
                                   ! interior layers that are just lighter and
                                   ! just denser than the lower buffer layer.
 
-  real :: R0_det, T_det, S_det    ! Detrained values of R0 [R ~> kg m-3], T [degC], and S [ppt].
-  real :: Rcv_stays, R0_stays     ! Values of Rcv and R0 that stay in a layer.
-  real :: T_stays, S_stays        ! Values of T and S that stay in a layer.
+  real :: R0_det, T_det, S_det    ! Detrained values of R0 [R ~> kg m-3], T [C ~> degC] and S [S ~> ppt]
+  real :: Rcv_stays, R0_stays     ! Values of Rcv and R0 that stay in a layer [R ~> kg m-3]
+  real :: T_stays, S_stays        ! Values of T and S that stay in a layer, [C ~> degC] and S [S ~> ppt]
   real :: dSpice_det, dSpice_stays! The spiciness difference between an original
                                   ! buffer layer and the water that moves into
                                   ! an interior layer or that stays in that
@@ -2334,8 +2269,8 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, j, 
   real :: dPE_time_ratio          ! Larger of 1 and the detrainment timescale over dt [nondim].
   real :: dT_dS_gauge, dS_dT_gauge ! The relative scales of temperature and
                                   ! salinity changes in defining spiciness, in
-                                  ! [degC ppt-1] and [ppt degC-1].
-  real :: I_denom                 ! A work variable with units of [ppt2 R-2 ~> ppt2 m6 kg-2].
+                                  ! [C S-1 ~> degC ppt-1] and [S C-1 ~> ppt degC-1].
+  real :: I_denom                 ! A work variable with units of [S2 R-2 ~> ppt2 m6 kg-2].
 
   real :: g_2                     ! 1/2 g_Earth [L2 Z-1 T-2 ~> m s-2].
   real :: Rho0xG                  ! Rho0 times G_Earth [R L2 Z-1 T-2 ~> kg m-2 s-2].
@@ -2347,19 +2282,18 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, j, 
   real :: h_neglect ! A thickness that is so small it is usually lost
                     ! in roundoff and can be neglected [H ~> m or kg m-2].
 
-  real :: s1en                    ! A work variable [H2 L2 kg m-1 T-3 ~> kg m3 s-3 or kg3 m-3 s-3].
+  real :: s1en                    ! A work variable [R Z L2 T-3 ~> W m-2]
   real :: s1, s2, bh0             ! Work variables [H ~> m or kg m-2].
   real :: s3sq                    ! A work variable [H2 ~> m2 or kg2 m-4].
-  real :: I_ya, b1                ! Nondimensional work variables.
+  real :: I_ya, b1                ! Nondimensional work variables [nondim]
   real :: Ih, Ihdet, Ih1f, Ih2f   ! Assorted inverse thickness work variables,
   real :: Ihk0, Ihk1, Ih12        ! all in [H-1 ~> m-1 or m2 kg-1].
   real :: dR1, dR2, dR2b, dRk1    ! Assorted density difference work variables,
   real :: dR0, dR21, dRcv         ! all in [R ~> kg m-3].
-  real :: dRcv_stays, dRcv_det, dRcv_lim
+  real :: dRcv_stays, dRcv_det, dRcv_lim ! Assorted densities [R ~> kg m-3]
   real :: Angstrom                ! The minumum layer thickness [H ~> m or kg m-2].
 
   real :: h2_to_k1_lim, T_new, S_new, T_max, T_min, S_max, S_min
-  character(len=200) :: mesg
 
   integer :: i, k, k0, k1, is, ie, nz, kb1, kb2, nkmb
   is = G%isc ; ie = G%iec ; nz = GV%ke
@@ -2650,12 +2584,12 @@ subroutine mixedlayer_detrain_2(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, j, 
                            dT_dS_gauge*dRcv_dT(i)*(S(i,k1)-S(i,kb2))
               if (dSpice_det*dSpice_lim <= 0.0) dSpice_lim = 0.0
             endif
-            if (k1<nz) then; if (h(i,k1+1) > 10.0*Angstrom) then
+            if (k1<nz) then ; if (h(i,k1+1) > 10.0*Angstrom) then
               dSpice_lim2 = dS_dT_gauge*dRcv_dS(i)*(T(i,k1+1)-T(i,kb2)) - &
                             dT_dS_gauge*dRcv_dT(i)*(S(i,k1+1)-S(i,kb2))
               if ((dSpice_det*dSpice_lim2 > 0.0) .and. &
                   (abs(dSpice_lim2) > abs(dSpice_lim))) dSpice_lim = dSpice_lim2
-            endif; endif
+            endif ; endif
             if (abs(dSpice_det) > abs(dSpice_lim)) dSpice_det = dSpice_lim
 
             I_denom = 1.0 / (dRcv_dS(i)**2 + (dT_dS_gauge*dRcv_dT(i))**2)
@@ -3106,8 +3040,8 @@ subroutine mixedlayer_detrain_1(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, d_e
   type(verticalGrid_type),            intent(in)    :: GV   !< The ocean's vertical grid structure.
   real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: h    !< Layer thickness [H ~> m or kg m-2].
                                                             !! Layer 0 is the new mixed layer.
-  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: T    !< Potential temperature [degC].
-  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: S    !< Salinity [ppt].
+  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: T    !< Potential temperature [C ~> degC].
+  real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: S    !< Salinity [S ~> ppt].
   real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: R0   !< Potential density referenced to
                                                             !! surface pressure [R ~> kg m-3].
   real, dimension(SZI_(G),SZK0_(GV)), intent(inout) :: Rcv  !< The coordinate defining potential
@@ -3127,15 +3061,14 @@ subroutine mixedlayer_detrain_1(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, d_e
                                                             !! a layer.
   integer,                            intent(in)    :: j    !< The meridional row to work on.
   type(unit_scale_type),              intent(in)    :: US   !< A dimensional unit scaling type
-  type(bulkmixedlayer_CS),            pointer       :: CS   !< The control structure returned by a
-                                                            !! previous call to mixedlayer_init.
+  type(bulkmixedlayer_CS),            intent(inout) :: CS   !< Bulk mixed layer control struct
   real, dimension(SZI_(G)),           intent(in)    :: dRcv_dT !< The partial derivative of
                                                             !! coordinate defining potential density
                                                             !! with potential temperature
-                                                            !! [R degC-1 ~> kg m-3 degC-1].
+                                                            !! [R C-1 ~> kg m-3 degC-1].
   real, dimension(SZI_(G)),           intent(in)    :: dRcv_dS    !< The partial derivative of
                                                             !! coordinate defining potential density
-                                                            !! with salinity [R ppt-1 ~> kg m-3 ppt-1].
+                                                            !! with salinity [R S-1 ~> kg m-3 ppt-1].
   real, dimension(SZI_(G)),           intent(in)    :: max_BL_det !< If non-negative, the maximum
                                                             !! detrainment permitted from the buffer
                                                             !! layers [H ~> m or kg m-2].
@@ -3148,8 +3081,8 @@ subroutine mixedlayer_detrain_1(h, T, S, R0, Rcv, RcvTgt, dt, dt_diag, d_ea, d_e
   real :: detrain(SZI_(G))    ! The thickness of fluid to detrain
                               ! from the mixed layer [H ~> m or kg m-2].
   real :: dT_dR, dS_dR, dRml, dR0_dRcv, dT_dS_wt2
-  real :: I_denom             ! A work variable [ppt2 R-2 ~> ppt2 m6 kg-2].
-  real :: Sdown, Tdown
+  real :: I_denom             ! A work variable [S2 R-2 ~> ppt2 m6 kg-2].
+  real :: Sdown, Tdown        ! A salinity [S ~> ppt] and a temperature [C ~> degC]
   real :: dt_Time             ! The timestep divided by the detrainment timescale [nondim].
   real :: g_H2_2Rho0dt        ! Half the gravitational acceleration times the square of the
                               ! conversion from H to m divided by the mean density times the time
@@ -3395,16 +3328,8 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
                                                  !! parameters.
   type(diag_ctrl), target, intent(inout) :: diag !< A structure that is used to regulate diagnostic
                                                  !! output.
-  type(bulkmixedlayer_CS), pointer       :: CS   !< A pointer that is set to point to the control
-                                                 !! structure for this module.
-! Arguments: Time - The current model time.
-!  (in)      G - The ocean's grid structure.
-!  (in)      GV - The ocean's vertical grid structure.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
-!  (in)      diag - A structure that is used to regulate diagnostic output.
-!  (in/out)  CS - A pointer that is set to point to the control structure
-!                  for this module
+  type(bulkmixedlayer_CS), intent(inout) :: CS   !< Bulk mixed layer control struct
+
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "MOM_mixed_layer"  ! This module's name.
@@ -3414,12 +3339,7 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
   logical :: use_temperature, use_omega
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
-  if (associated(CS)) then
-    call MOM_error(WARNING, "mixedlayer_init called with an associated"// &
-                            "associated control structure.")
-    return
-  else ; allocate(CS) ; endif
-
+  CS%initialized = .true.
   CS%diag => diag
   CS%Time => Time
 
@@ -3476,18 +3396,18 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
                  "If true, limit the detrainment from the buffer layers "//&
                  "to not be too different from the neighbors.", default=.false.)
   call get_param(param_file, mdl, "ALLOWED_DETRAIN_TEMP_CHG", CS%Allowed_T_chg, &
-                 "The amount by which temperature is allowed to exceed "//&
-                 "previous values during detrainment.", units="K", default=0.5)
+                 "The amount by which temperature is allowed to exceed previous values "//&
+                 "during detrainment.", units="K", default=0.5, scale=US%degC_to_C)
   call get_param(param_file, mdl, "ALLOWED_DETRAIN_SALT_CHG", CS%Allowed_S_chg, &
-                 "The amount by which salinity is allowed to exceed "//&
-                 "previous values during detrainment.", units="PSU", default=0.1)
+                 "The amount by which salinity is allowed to exceed previous values "//&
+                 "during detrainment.", units="PSU", default=0.1, scale=US%ppt_to_S)
   call get_param(param_file, mdl, "ML_DT_DS_WEIGHT", CS%dT_dS_wt, &
                  "When forced to extrapolate T & S to match the layer "//&
                  "densities, this factor (in deg C / PSU) is combined "//&
                  "with the derivatives of density with T & S to determine "//&
                  "what direction is orthogonal to density contours. It "//&
-                 "should be a typical value of (dR/dS) / (dR/dT) in "//&
-                 "oceanic profiles.", units="degC PSU-1", default=6.0)
+                 "should be a typical value of (dR/dS) / (dR/dT) in oceanic profiles.", &
+                 units="degC PSU-1", default=6.0, scale=US%degC_to_C*US%S_to_ppt)
   call get_param(param_file, mdl, "BUFFER_LAYER_EXTRAP_LIMIT", CS%BL_extrap_lim, &
                  "A limit on the density range over which extrapolation "//&
                  "can occur when detraining from the buffer layers, "//&
@@ -3580,14 +3500,8 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
                  "If true, use code with a bug that causes a loss of momentum conservation "//&
                  "during mixedlayer convection.", default=.false.)
 
-  call get_param(param_file, mdl, "ALLOW_CLOCKS_IN_OMP_LOOPS", &
-                 CS%allow_clocks_in_omp_loops, &
-                 "If true, clocks can be called from inside loops that can "//&
-                 "be threaded. To run with multiple threads, set to False.", &
-                 default=.true.)
-
   CS%id_ML_depth = register_diag_field('ocean_model', 'h_ML', diag%axesT1, &
-      Time, 'Surface mixed layer depth', 'm')
+      Time, 'Surface mixed layer depth', 'm', conversion=GV%H_to_m)
   CS%id_TKE_wind = register_diag_field('ocean_model', 'TKE_wind', diag%axesT1, &
       Time, 'Wind-stirring source of mixed layer TKE', &
       'm3 s-3', conversion=US%Z_to_m*(US%L_to_m**2)*(US%s_to_T**3))
@@ -3619,13 +3533,13 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
       Time, 'Spurious source of potential energy from mixed layer only detrainment', &
       'W m-2', conversion=US%RZ3_T3_to_W_m2*US%L_to_Z**2)
   CS%id_h_mismatch = register_diag_field('ocean_model', 'h_miss_ML', diag%axesT1, &
-      Time, 'Summed absolute mismatch in entrainment terms', 'm', conversion=US%Z_to_m)
+      Time, 'Summed absolute mismatch in entrainment terms', 'm', conversion=GV%H_to_m)
   CS%id_Hsfc_used = register_diag_field('ocean_model', 'Hs_used', diag%axesT1, &
-      Time, 'Surface region thickness that is used', 'm', conversion=US%Z_to_m)
+      Time, 'Surface region thickness that is used', 'm', conversion=GV%H_to_m)
   CS%id_Hsfc_max = register_diag_field('ocean_model', 'Hs_max', diag%axesT1, &
-      Time, 'Maximum surface region thickness', 'm', conversion=US%Z_to_m)
+      Time, 'Maximum surface region thickness', 'm', conversion=GV%H_to_m)
   CS%id_Hsfc_min = register_diag_field('ocean_model', 'Hs_min', diag%axesT1, &
-      Time, 'Minimum surface region thickness', 'm', conversion=US%Z_to_m)
+      Time, 'Minimum surface region thickness', 'm', conversion=GV%H_to_m)
  !CS%lim_det_dH_sfc = 0.5 ; CS%lim_det_dH_bathy = 0.2 ! Technically these should not get used if limit_det is false?
   if (CS%limit_det .or. (CS%id_Hsfc_min > 0)) then
     call get_param(param_file, mdl, "LIMIT_BUFFER_DET_DH_SFC", CS%lim_det_dH_sfc, &
@@ -3664,24 +3578,8 @@ subroutine bulkmixedlayer_init(Time, G, GV, US, param_file, diag, CS)
   if (CS%id_PE_detrain2 > 0) call safe_alloc_alloc(CS%diag_PE_detrain2, isd, ied, jsd, jed)
   if (CS%id_ML_depth > 0) call safe_alloc_alloc(CS%ML_depth, isd, ied, jsd, jed)
 
-  if (CS%allow_clocks_in_omp_loops) then
-    id_clock_detrain = cpu_clock_id('(Ocean mixed layer detrain)', grain=CLOCK_ROUTINE)
-    id_clock_mech = cpu_clock_id('(Ocean mixed layer mechanical entrainment)', grain=CLOCK_ROUTINE)
-    id_clock_conv = cpu_clock_id('(Ocean mixed layer convection)', grain=CLOCK_ROUTINE)
-    if (CS%ML_resort) then
-      id_clock_resort = cpu_clock_id('(Ocean mixed layer resorting)', grain=CLOCK_ROUTINE)
-    else
-      id_clock_adjustment = cpu_clock_id('(Ocean mixed layer convective adjustment)', grain=CLOCK_ROUTINE)
-    endif
-    id_clock_EOS = cpu_clock_id('(Ocean mixed layer EOS)', grain=CLOCK_ROUTINE)
-  endif
-
   if (CS%limit_det .or. (CS%id_Hsfc_min > 0)) &
-      id_clock_pass = cpu_clock_id('(Ocean mixed layer halo updates)', grain=CLOCK_ROUTINE)
-
-
-!  if (CS%limit_det) then
-!  endif
+    id_clock_pass = cpu_clock_id('(Ocean mixed layer halo updates)', grain=CLOCK_ROUTINE)
 
 end subroutine bulkmixedlayer_init
 
@@ -3717,16 +3615,15 @@ end function EF4
 !!
 !!   This file contains the subroutine (bulkmixedlayer) that
 !! implements a Kraus-Turner-like bulk mixed layer, based on the work
-!! of various people, as described in the review paper by Niiler and
-!! Kraus (1979), with particular attention to the form proposed by
-!! Oberhuber (JPO, 1993, 808-829), with an extension to a refied bulk
-!! mixed layer as described in Hallberg (Aha Huliko'a, 2003).  The
-!! physical processes portrayed in this subroutine include convective
-!! adjustment and mixed layer entrainment and detrainment.
-!! Penetrating shortwave radiation and an exponential decay of TKE
-!! fluxes are also supported by this subroutine.  Several constants
+!! of various people, as described in the review paper by \cite Niiler1977,
+!! with particular attention to the form proposed by \cite Oberhuber1993,
+!! with an extension to a refined bulk mixed layer as described in
+!! Hallberg (\cite muller2003). The physical processes portrayed in
+!! this subroutine include convective adjustment and mixed layer entrainment
+!! and detrainment. Penetrating shortwave radiation and an exponential decay
+!! of TKE fluxes are also supported by this subroutine.  Several constants
 !! can alternately be set to give a traditional Kraus-Turner mixed
 !! layer scheme, although that is not the preferred option.  The
-!! physical processes and arguments are described in detail below.
+!! physical processes and arguments are described in detail in \ref BML.
 
 end module MOM_bulk_mixed_layer
