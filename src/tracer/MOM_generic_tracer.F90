@@ -83,7 +83,6 @@ module MOM_generic_tracer
     type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
                                                !! regulate the timing of diagnostic output.
     type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< Restart control structure
-    type(ocean_OBC_type), pointer :: OBC => NULL() !<open boundary condition type
     !> Pointer to the first element of the linked list of generic tracers.
     type(g_tracer_type), pointer :: g_tracer_list => NULL()
 
@@ -399,7 +398,7 @@ contains
       endif
 
       call g_tracer_get_obc_segment_props(g_tracer,g_tracer_name,obc_has )
-      if(obc_has .and. g_tracer_is_prog(g_tracer)) call fill_obgc_segments(G, GV, CS%OBC, tr_ptr, g_tracer_name)
+      if(obc_has .and. g_tracer_is_prog(g_tracer)) call fill_obgc_segments(G, GV, OBC, tr_ptr, g_tracer_name)
       !traverse the linked list till hit NULL
       call g_tracer_get_next(g_tracer, g_tracer_next)
       if (.NOT. associated(g_tracer_next)) exit
