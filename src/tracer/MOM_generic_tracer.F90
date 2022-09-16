@@ -563,11 +563,15 @@ contains
             call g_tracer_get_pointer(g_tracer,g_tracer_name,'trunoff',trunoff_array)
             call g_tracer_get_pointer(g_tracer,g_tracer_name,'runoff_tracer_flux',runoff_tracer_flux_array)
             runoff_tracer_flux_array(:,:) = trunoff_array(:,:) * &
-                     US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
+                  US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
+            call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
+                  fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
+                  in_flux_optional=runoff_tracer_flux_array)
+          else
+            call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
+                  fluxes, h_work, evap_CFL_limit, minimum_forcing_depth)
           endif
-          call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
-                            fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
-                            in_flux_optional=runoff_tracer_flux_array)
+          
         endif
 
          !traverse the linked list till hit NULL
