@@ -566,7 +566,7 @@ contains
                   US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
             call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
                   fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
-                  in_flux_optional=runoff_tracer_flux_array)
+                  in_flux_optional=trunoff_array)
           else
             call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
                   fluxes, h_work, evap_CFL_limit, minimum_forcing_depth)
