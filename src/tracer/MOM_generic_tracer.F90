@@ -507,6 +507,27 @@ contains
     !      MOM5 has to modified to conform.
 
     !
+    !Add contribution of river to surface flux
+    !
+    g_tracer=>CS%g_tracer_list
+    do
+      if (_ALLOCATED(g_tracer%trunoff)) then
+        call g_tracer_get_alias(g_tracer,g_tracer_name)
+        call g_tracer_get_pointer(g_tracer,g_tracer_name,'stf',   stf_array)
+        call g_tracer_get_pointer(g_tracer,g_tracer_name,'trunoff',trunoff_array)
+        call g_tracer_get_pointer(g_tracer,g_tracer_name,'runoff_tracer_flux',runoff_tracer_flux_array)
+        !nnz: Why is fluxes%river = 0?
+        runoff_tracer_flux_array(:,:) = trunoff_array(:,:) * &
+                 US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
+        stf_array = stf_array + runoff_tracer_flux_array
+      endif
+
+      !traverse the linked list till hit NULL
+      call g_tracer_get_next(g_tracer, g_tracer_next)
+      if (.NOT. associated(g_tracer_next)) exit
+      g_tracer => g_tracer_next
+
+    enddo
 
     !
     !Prepare input arrays for source update
@@ -558,20 +579,8 @@ contains
           do k=1,nk ;do j=jsc,jec ; do i=isc,iec
             h_work(i,j,k) = h_old(i,j,k)
           enddo ; enddo ; enddo
-          if (_ALLOCATED(g_tracer%trunoff)) then
-            call g_tracer_get_alias(g_tracer,g_tracer_name)
-            call g_tracer_get_pointer(g_tracer,g_tracer_name,'trunoff',trunoff_array)
-            call g_tracer_get_pointer(g_tracer,g_tracer_name,'runoff_tracer_flux',runoff_tracer_flux_array)
-            runoff_tracer_flux_array(:,:) = trunoff_array(:,:) * &
-                  US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
-            call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
-                  fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
-                  in_flux_optional=trunoff_array)
-          else
-            call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
-                  fluxes, h_work, evap_CFL_limit, minimum_forcing_depth)
-          endif
-          
+          call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
+                            fluxes, h_work, evap_CFL_limit, minimum_forcing_depth)
         endif
 
          !traverse the linked list till hit NULL
