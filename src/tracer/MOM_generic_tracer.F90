@@ -580,7 +580,8 @@ contains
             h_work(i,j,k) = h_old(i,j,k)
           enddo ; enddo ; enddo
           call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
-                            fluxes, h_work, evap_CFL_limit, minimum_forcing_depth)
+                            fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
+                            in_flux_optional=stf_array)
         endif
 
          !traverse the linked list till hit NULL
