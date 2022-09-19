@@ -581,7 +581,7 @@ contains
           enddo ; enddo ; enddo
           call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
                             fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
-                            in_flux_optional=stf_array)
+                            in_flux_optional=stf_array*dt*GV%RZ_to_H)
         endif
 
          !traverse the linked list till hit NULL
