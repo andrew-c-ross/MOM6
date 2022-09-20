@@ -478,7 +478,7 @@ contains
 
     type(g_tracer_type), pointer  :: g_tracer, g_tracer_next
     character(len=fm_string_len)  :: g_tracer_name
-    real, dimension(:,:), pointer :: stf_array,trunoff_array,runoff_tracer_flux_array
+    real, dimension(:,:), pointer :: stf_array,trunoff_array,runoff_tracer_flux_array,runoff_influx_array
 
     real :: surface_field(SZI_(G),SZJ_(G))
     real :: dz_ml(SZI_(G),SZJ_(G))  ! The mixed layer depth in the MKS units used for generic tracers [m]
@@ -519,7 +519,9 @@ contains
         !nnz: Why is fluxes%river = 0?
         runoff_tracer_flux_array(:,:) = trunoff_array(:,:) * &
                  US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
-        stf_array = stf_array + runoff_tracer_flux_array
+        runoff_influx_array(:,:) = trunoff_array(:,:) * &
+                 (US%RZ_T_to_kg_m2s * fluxes%lrunoff(:,:) * dt * GV%RZ_to_H) 
+        ! stf_array = stf_array + runoff_tracer_flux_array
       endif
 
       !traverse the linked list till hit NULL
@@ -580,7 +582,8 @@ contains
             h_work(i,j,k) = h_old(i,j,k)
           enddo ; enddo ; enddo
           call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
-                            fluxes, h_work, evap_CFL_limit, minimum_forcing_depth)
+                            fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
+                            in_flux_optional=runoff_influx_array)
         endif
 
          !traverse the linked list till hit NULL
