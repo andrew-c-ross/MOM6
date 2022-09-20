@@ -478,17 +478,21 @@ contains
 
     type(g_tracer_type), pointer  :: g_tracer, g_tracer_next
     character(len=fm_string_len)  :: g_tracer_name
-    real, dimension(:,:), pointer :: stf_array,trunoff_array,runoff_tracer_flux_array,runoff_influx_array
+    real, dimension(:,:), pointer :: stf_array,trunoff_array,runoff_tracer_flux_array
 
     real :: surface_field(SZI_(G),SZJ_(G))
     real :: dz_ml(SZI_(G),SZJ_(G))  ! The mixed layer depth in the MKS units used for generic tracers [m]
     real :: sosga
+
+    real :: runoff_influx_array(SZI_(G),SZJ_(G))
 
     real, dimension(G%isd:G%ied,G%jsd:G%jed,GV%ke) :: rho_dzt, dzt
     real, dimension(SZI_(G),SZJ_(G),SZK_(GV))      :: h_work
     integer :: i, j, k, isc, iec, jsc, jec, nk
 
     isc = G%isc ; iec = G%iec ; jsc = G%jsc ; jec = G%jec ; nk = GV%ke
+
+    runoff_influx_array(:, :) = 0.0
 
     !Get the tracer list
     if (.NOT. associated(CS%g_tracer_list)) call MOM_error(FATAL,&
@@ -519,8 +523,10 @@ contains
         !nnz: Why is fluxes%river = 0?
         runoff_tracer_flux_array(:,:) = trunoff_array(:,:) * &
                  US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
-        runoff_influx_array(:,:) = trunoff_array(:,:) * &
-                 (US%RZ_T_to_kg_m2s * fluxes%lrunoff(:,:) * dt * GV%RZ_to_H) 
+        do j = jsc, jec ; do i = isc, iec
+        runoff_influx_array(i,j) = trunoff_array(i,j) * &
+                 (US%RZ_T_to_kg_m2s * fluxes%lrunoff(i,j) * dt * GV%RZ_to_H) 
+        enddo; enddo 
         ! stf_array = stf_array + runoff_tracer_flux_array
       endif
 
