@@ -606,7 +606,7 @@ contains
     ! surface source is applied and diapycnal advection and diffusion occurs.
     if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
       ! Last arg is tau which is always 1 for MOM6
-      call generic_tracer_vertdiff_G(h_old, ea, eb, US%T_to_s*dt, GV%kg_m2_to_H, GV%m_to_H, 1)
+      call generic_tracer_vertdiff_G(h_work, ea, eb, US%T_to_s*dt, GV%kg_m2_to_H, GV%m_to_H, 1)
     else
       ! Last arg is tau which is always 1 for MOM6
       call generic_tracer_vertdiff_G(h_old, ea, eb, US%T_to_s*dt, GV%kg_m2_to_H, GV%m_to_H, 1)
