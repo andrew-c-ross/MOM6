@@ -524,7 +524,7 @@ contains
         runoff_tracer_flux_array(:,:) = trunoff_array(:,:) * &
                  US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
         do j = jsc, jec ; do i = isc, iec
-          all_stf(i,j) = ((trunoff_array(i,j) * US%RZ_T_to_kg_m2s * fluxes%lrunoff(i,j)) + stf_array) * (dt * GV%RZ_to_H) 
+          all_stf(i,j) = ((trunoff_array(i,j) * US%RZ_T_to_kg_m2s * fluxes%lrunoff(i,j)) + stf_array(i,j)) * (dt * GV%RZ_to_H) 
           stf_array(i,j) = 0.0
         enddo; enddo 
         ! stf_array = stf_array + runoff_tracer_flux_array
