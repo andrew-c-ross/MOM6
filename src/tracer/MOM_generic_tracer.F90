@@ -484,7 +484,7 @@ contains
     real :: dz_ml(SZI_(G),SZJ_(G))  ! The mixed layer depth in the MKS units used for generic tracers [m]
     real :: sosga
 
-    real :: runoff_influx_array(SZI_(G),SZJ_(G))
+    real :: all_stf(SZI_(G),SZJ_(G))
 
     real, dimension(G%isd:G%ied,G%jsd:G%jed,GV%ke) :: rho_dzt, dzt
     real, dimension(SZI_(G),SZJ_(G),SZK_(GV))      :: h_work
@@ -492,7 +492,7 @@ contains
 
     isc = G%isc ; iec = G%iec ; jsc = G%jsc ; jec = G%jec ; nk = GV%ke
 
-    runoff_influx_array(:, :) = 0.0
+    all_stf(:, :) = 0.0
 
     !Get the tracer list
     if (.NOT. associated(CS%g_tracer_list)) call MOM_error(FATAL,&
@@ -524,8 +524,8 @@ contains
         runoff_tracer_flux_array(:,:) = trunoff_array(:,:) * &
                  US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
         do j = jsc, jec ; do i = isc, iec
-        runoff_influx_array(i,j) = trunoff_array(i,j) * &
-                 (US%RZ_T_to_kg_m2s * fluxes%lrunoff(i,j) * dt * GV%RZ_to_H) 
+          all_stf(i,j) = ((trunoff_array(i,j) * US%RZ_T_to_kg_m2s * fluxes%lrunoff(i,j)) + stf_array) * (dt * GV%RZ_to_H) 
+          stf_array(i,j) = 0.0
         enddo; enddo 
         ! stf_array = stf_array + runoff_tracer_flux_array
       endif
@@ -589,7 +589,7 @@ contains
           enddo ; enddo ; enddo
           call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
                             fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
-                            in_flux_optional=runoff_influx_array)
+                            in_flux_optional=all_stf)
         endif
 
          !traverse the linked list till hit NULL
