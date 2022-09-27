@@ -589,6 +589,7 @@ contains
           else
             call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
                               fluxes, h_work, evap_CFL_limit, minimum_forcing_depth)
+          endif
         endif
 
          !traverse the linked list till hit NULL
