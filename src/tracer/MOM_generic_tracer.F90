@@ -582,6 +582,7 @@ contains
             h_work(i,j,k) = h_old(i,j,k)
           enddo ; enddo ; enddo
           if (_ALLOCATED(g_tracer%trunoff)) then
+            call g_tracer_get_alias(g_tracer,g_tracer_name)
             call g_tracer_get_pointer(g_tracer,g_tracer_name,'runoff_tracer_flux',runoff_tracer_flux_array)
             call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
                               fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
