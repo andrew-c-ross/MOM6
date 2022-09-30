@@ -468,7 +468,9 @@ contains
         !nnz: Why is fluxes%river = 0?
         runoff_tracer_flux_array(:,:) = trunoff_array(:,:) * &
                  US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
-        stf_array = stf_array + runoff_tracer_flux_array
+        do j = jsc, jec ; do i = isc, iec
+          stf_array(i,j) = stf_array(i,j) + runoff_tracer_flux_array(i,j)
+        enddo ; enddo
       endif
 
       !traverse the linked list till hit NULL
