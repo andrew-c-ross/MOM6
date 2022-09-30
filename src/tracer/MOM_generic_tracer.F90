@@ -83,7 +83,6 @@ module MOM_generic_tracer
     type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
                                                !! regulate the timing of diagnostic output.
     type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< Restart control structure
-    type(ocean_OBC_type), pointer :: OBC => NULL() !<open boundary condition type
     !> Pointer to the first element of the linked list of generic tracers.
     type(g_tracer_type), pointer :: g_tracer_list => NULL()
 
@@ -399,7 +398,7 @@ contains
       endif
 
       call g_tracer_get_obc_segment_props(g_tracer,g_tracer_name,obc_has )
-      if(obc_has .and. g_tracer_is_prog(g_tracer)) call fill_obgc_segments(G, GV, CS%OBC, tr_ptr, g_tracer_name)
+      if(obc_has .and. g_tracer_is_prog(g_tracer)) call fill_obgc_segments(G, GV, OBC, tr_ptr, g_tracer_name)
       !traverse the linked list till hit NULL
       call g_tracer_get_next(g_tracer, g_tracer_next)
       if (.NOT. associated(g_tracer_next)) exit
@@ -514,13 +513,15 @@ contains
     do
       if (_ALLOCATED(g_tracer%trunoff)) then
         call g_tracer_get_alias(g_tracer,g_tracer_name)
-        call g_tracer_get_pointer(g_tracer,g_tracer_name,'stf',   stf_array)
+        ! call g_tracer_get_pointer(g_tracer,g_tracer_name,'stf',   stf_array)
         call g_tracer_get_pointer(g_tracer,g_tracer_name,'trunoff',trunoff_array)
         call g_tracer_get_pointer(g_tracer,g_tracer_name,'runoff_tracer_flux',runoff_tracer_flux_array)
         !nnz: Why is fluxes%river = 0?
-        runoff_tracer_flux_array(:,:) = trunoff_array(:,:) * &
-                 US%RZ_T_to_kg_m2s*fluxes%lrunoff(:,:)
-        stf_array = stf_array + runoff_tracer_flux_array
+        do j = jsc, jec ; do i = isc, iec
+          runoff_tracer_flux_array(i,j) = trunoff_array(i,j) * &
+                 (US%RZ_T_to_kg_m2s * fluxes%lrunoff(i,j) * dt * GV%RZ_to_H) 
+        enddo; enddo 
+        ! stf_array = stf_array + runoff_tracer_flux_array
       endif
 
       !traverse the linked list till hit NULL
@@ -580,8 +581,16 @@ contains
           do k=1,nk ;do j=jsc,jec ; do i=isc,iec
             h_work(i,j,k) = h_old(i,j,k)
           enddo ; enddo ; enddo
-          call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
-                            fluxes, h_work, evap_CFL_limit, minimum_forcing_depth)
+          if (_ALLOCATED(g_tracer%trunoff)) then
+            call g_tracer_get_alias(g_tracer,g_tracer_name)
+            call g_tracer_get_pointer(g_tracer,g_tracer_name,'runoff_tracer_flux',runoff_tracer_flux_array)
+            call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
+                              fluxes, h_work, evap_CFL_limit, minimum_forcing_depth, &
+                              in_flux_optional=runoff_tracer_flux_array)
+          else
+            call applyTracerBoundaryFluxesInOut(G, GV, g_tracer%field(:,:,:,1), dt, &
+                              fluxes, h_work, evap_CFL_limit, minimum_forcing_depth)
+          endif
         endif
 
          !traverse the linked list till hit NULL
