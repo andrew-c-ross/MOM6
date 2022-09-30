@@ -517,10 +517,8 @@ contains
         call g_tracer_get_pointer(g_tracer,g_tracer_name,'trunoff',trunoff_array)
         call g_tracer_get_pointer(g_tracer,g_tracer_name,'runoff_tracer_flux',runoff_tracer_flux_array)
         !nnz: Why is fluxes%river = 0?
-        do j = jsc, jec ; do i = isc, iec
-          runoff_tracer_flux_array(i,j) = trunoff_array(i,j) * &
-                 (US%RZ_T_to_kg_m2s * fluxes%lrunoff(i,j) * dt * GV%RZ_to_H) 
-        enddo; enddo 
+        runoff_tracer_flux_array(:, :) = trunoff_array(:, :) * &
+                 (US%RZ_T_to_kg_m2s * fluxes%lrunoff(:, :) * dt * GV%RZ_to_H) 
         ! stf_array = stf_array + runoff_tracer_flux_array
       endif
 
