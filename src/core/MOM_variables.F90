@@ -41,8 +41,8 @@ end type p2d
 !! will be returned to the calling program
 type, public :: surface
   real, allocatable, dimension(:,:) :: &
-    SST, &         !< The sea surface temperature [degC].
-    SSS, &         !< The sea surface salinity [ppt ~> psu or gSalt/kg].
+    SST, &         !< The sea surface temperature [C ~> degC].
+    SSS, &         !< The sea surface salinity [S ~> psu or gSalt/kg].
     sfc_density, & !< The mixed layer density [R ~> kg m-3].
     sfc_cfc11,   & !< Sea surface concentration of CFC11 [mol kg-1].
     sfc_cfc12,   & !< Sea surface concentration of CFC12 [mol kg-1].
@@ -56,14 +56,14 @@ type, public :: surface
     melt_potential, & !< Instantaneous amount of heat that can be used to melt sea ice [Q R Z ~> J m-2].
                       !! This is computed w.r.t. surface freezing temperature.
     ocean_mass, &  !< The total mass of the ocean [R Z ~> kg m-2].
-    ocean_heat, &  !< The total heat content of the ocean in [degC R Z ~> degC kg m-2].
-    ocean_salt, &  !< The total salt content of the ocean in [kgSalt kg-1 R Z ~> kgSalt m-2].
+    ocean_heat, &  !< The total heat content of the ocean in [C R Z ~> degC kg m-2].
+    ocean_salt, &  !< The total salt content of the ocean in [1e-3 S R Z ~> kgSalt m-2].
     taux_shelf, &  !< The zonal stresses on the ocean under shelves [R L Z T-2 ~> Pa].
     tauy_shelf     !< The meridional stresses on the ocean under shelves [R L Z T-2 ~> Pa].
   logical :: T_is_conT = .false. !< If true, the temperature variable SST is actually the
-                   !! conservative temperature in [degC].
+                   !! conservative temperature in [C ~> degC].
   logical :: S_is_absS = .false. !< If true, the salinity variable SSS is actually the
-                   !! absolute salinity in [gSalt kg-1].
+                   !! absolute salinity in [S ~> gSalt kg-1].
   type(coupler_2d_bc_type) :: tr_fields !< A structure that may contain an
                 !! array of named fields describing tracer-related quantities.
        !### NOTE: ALL OF THE ARRAYS IN TR_FIELDS USE THE COUPLER'S INDEXING CONVENTION AND HAVE NO
@@ -208,6 +208,8 @@ type, public :: cont_diag_ptrs
   real, pointer, dimension(:,:,:) :: &
     uh => NULL(), &   !< Resolved zonal layer thickness fluxes, [H L2 T-1 ~> m3 s-1 or kg s-1]
     vh => NULL(), &   !< Resolved meridional layer thickness fluxes, [H L2 T-1 ~> m3 s-1 or kg s-1]
+    uh_smooth => NULL(), & !< Interface height smoothing induced zonal volume fluxes [H L2 T-1 ~> m3 s-1 or kg s-1]
+    vh_smooth => NULL(), & !< Interface height smoothing induced meridional volume fluxes [H L2 T-1 ~> m3 s-1 or kg s-1]
     uhGM => NULL(), & !< Isopycnal height diffusion induced zonal volume fluxes [H L2 T-1 ~> m3 s-1 or kg s-1]
     vhGM => NULL()    !< Isopycnal height diffusion induced meridional volume fluxes [H L2 T-1 ~> m3 s-1 or kg s-1]
 
@@ -309,15 +311,16 @@ type, public :: BT_cont_type
   type(group_pass_type) :: pass_FA_uv !< Structure for face area group halo updates
 end type BT_cont_type
 
-
-!> pointers to grids modifying cell metric at porous barriers
-type, public :: porous_barrier_ptrs
-  real, pointer, dimension(:,:,:) :: por_face_areaU => NULL() !< fractional open area of U-faces [nondim]
-  real, pointer, dimension(:,:,:) :: por_face_areaV => NULL() !< fractional open area of V-faces [nondim]
-  real, pointer, dimension(:,:,:) :: por_layer_widthU => NULL() !< fractional open width of U-faces [nondim]
-  real, pointer, dimension(:,:,:) :: por_layer_widthV => NULL() !< fractional open width of V-faces [nondim]
-end type porous_barrier_ptrs
-
+!> Container for grids modifying cell metric at porous barriers
+! TODO: rename porous_barrier_type to porous_barrier_type
+type, public :: porous_barrier_type
+  ! Each of the following fields has nz layers.
+  real, allocatable :: por_face_areaU(:,:,:) !< fractional open area of U-faces [nondim]
+  real, allocatable :: por_face_areaV(:,:,:) !< fractional open area of V-faces [nondim]
+  ! Each of the following fields is found at nz+1 interfaces.
+  real, allocatable :: por_layer_widthU(:,:,:) !< fractional open width of U-faces [nondim]
+  real, allocatable :: por_layer_widthV(:,:,:) !< fractional open width of V-faces [nondim]
+end type porous_barrier_type
 
 contains
 

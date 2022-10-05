@@ -197,8 +197,10 @@ subroutine dense_water_initialize_sponges(G, GV, US, tv, depth_tot, param_file, 
   call get_param(param_file, mdl, "DENSE_WATER_SILL_HEIGHT", sill_height, default=default_sill, do_not_log=.true.)
 
   call get_param(param_file, mdl, "S_REF", S_ref, default=35.0, scale=US%ppt_to_S, do_not_log=.true.)
-  call get_param(param_file, mdl, "S_RANGE", S_range, scale=US%ppt_to_S, do_not_log=.true.)
-  call get_param(param_file, mdl, "T_REF", T_ref, scale=US%degC_to_C, do_not_log=.true.)
+  call get_param(param_file, mdl, "S_RANGE", S_range, &
+                 units='1e-3', default=2.0, scale=US%ppt_to_S, do_not_log=.true.)
+  call get_param(param_file, mdl, "T_REF", T_ref, &
+                 units='degC', scale=US%degC_to_C, fail_if_missing=.true., do_not_log=.true.)
 
   ! no active sponges
   if (west_sponge_time_scale <= 0. .and. east_sponge_time_scale <= 0.) return
@@ -277,8 +279,10 @@ subroutine dense_water_initialize_sponges(G, GV, US, tv, depth_tot, param_file, 
       enddo
     enddo
 
-    if (associated(tv%T)) call set_up_ALE_sponge_field(T, G, GV, tv%T, ACSp)
-    if (associated(tv%S)) call set_up_ALE_sponge_field(S, G, GV, tv%S, ACSp)
+    if ( associated(tv%T) ) call set_up_ALE_sponge_field(T, G, GV, tv%T, ACSp, 'temp', &
+        sp_long_name='temperature', sp_unit='degC s-1')
+    if ( associated(tv%S) ) call set_up_ALE_sponge_field(S, G, GV, tv%S, ACSp, 'salt', &
+        sp_long_name='salinity', sp_unit='g kg-1 s-1')
   else
     call MOM_error(FATAL, "dense_water_initialize_sponges: trying to use non ALE sponge")
   endif

@@ -23,7 +23,7 @@ use MOM_restart, only : register_restart_field, query_initialized, MOM_restart_C
 use MOM_restart, only : register_restart_field_as_obsolete
 use MOM_safe_alloc, only : safe_alloc_ptr, safe_alloc_alloc
 use MOM_unit_scaling, only : unit_scale_type
-use MOM_variables, only : thermo_var_ptrs, vertvisc_type, porous_barrier_ptrs
+use MOM_variables, only : thermo_var_ptrs, vertvisc_type, porous_barrier_type
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_EOS, only : calculate_density, calculate_density_derivs
 use MOM_open_boundary, only : ocean_OBC_type, OBC_NONE, OBC_DIRECTION_E
@@ -74,27 +74,30 @@ type, public :: set_visc_CS ; private
                             !! the properties of the bottom boundary layer.
   logical :: linear_drag    !< If true, the drag law is cdrag*`DRAG_BG_VEL`*u.
                             !! Runtime parameter `LINEAR_DRAG`.
-  logical :: Channel_drag   !< If true, the drag is exerted directly on each
-                            !! layer according to what fraction of the bottom
-                            !! they overlie.
+  logical :: Channel_drag   !< If true, the drag is exerted directly on each layer
+                            !! according to what fraction of the bottom they overlie.
+  real    :: Chan_drag_max_vol !< The maximum bottom boundary layer volume within which the
+                            !! channel drag is applied, normalized by the the full cell area,
+                            !! or a negative value to apply no maximum [H ~> m or kg m-2].
   logical :: correct_BBL_bounds !< If true, uses the correct bounds on the BBL thickness and
                             !! viscosity so that the bottom layer feels the intended drag.
   logical :: RiNo_mix       !< If true, use Richardson number dependent mixing.
   logical :: dynamic_viscous_ML !< If true, use a bulk Richardson number criterion to
                             !! determine the mixed layer thickness for viscosity.
   real    :: bulk_Ri_ML     !< The bulk mixed layer used to determine the
-                            !! thickness of the viscous mixed layer.  Nondim.
+                            !! thickness of the viscous mixed layer [nondim]
   real    :: omega          !<   The Earth's rotation rate [T-1 ~> s-1].
   real    :: ustar_min      !< A minimum value of ustar to avoid numerical
                             !! problems [Z T-1 ~> m s-1].  If the value is small enough,
                             !! this should not affect the solution.
   real    :: TKE_decay      !< The ratio of the natural Ekman depth to the TKE
-                            !! decay scale, nondimensional.
-  real    :: omega_frac     !<   When setting the decay scale for turbulence, use
-                            !! this fraction of the absolute rotation rate blended
-                            !! with the local value of f, as sqrt((1-of)*f^2 + of*4*omega^2).
-  logical :: answers_2018   !< If true, use the order of arithmetic and expressions that recover the
-                            !! answers from the end of 2018.  Otherwise, use updated and more robust
+                            !! decay scale [nondim]
+  real    :: omega_frac     !<   When setting the decay scale for turbulence, use this
+                            !! fraction of the absolute rotation rate blended with the local
+                            !! value of f, as sqrt((1-of)*f^2 + of*4*omega^2) [nondim]
+  integer :: answer_date    !< The vintage of the order of arithmetic and expressions in the set
+                            !! viscosity calculations.  Values below 20190101 recover the answers
+                            !! from the end of 2018, while higher values use updated and more robust
                             !! forms of the same expressions.
   logical :: debug          !< If true, write verbose checksums for debugging purposes.
   logical :: BBL_use_tidal_bg !< If true, use a tidal background amplitude for the bottom velocity
@@ -136,7 +139,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
                                                   !! related fields.
   type(set_visc_CS),        intent(inout) :: CS   !< The control structure returned by a previous
                                                   !! call to set_visc_init.
-  type(porous_barrier_ptrs),intent(in)    :: pbv  !< porous barrier fractional cell metrics
+  type(porous_barrier_type),intent(in)    :: pbv  !< porous barrier fractional cell metrics
 
   ! Local variables
   real, dimension(SZIB_(G)) :: &
@@ -232,6 +235,9 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
   real :: a2x48_apb3, Iapb, Ibma_2 ! Combinations of a and slope [H-1 ~> m-1 or m2 kg-1].
   ! All of the following "volumes" have units of thickness because they are normalized
   ! by the full horizontal area of a velocity cell.
+  real :: Vol_bbl_chan     ! The volume of the bottom boundary layer as used in the channel
+                           ! drag parameterization, normalized by the full horizontal area
+                           ! of the velocity cell [H ~> m or kg m-2].
   real :: Vol_open         ! The cell volume above which it is open [H ~> m or kg m-2].
   real :: Vol_direct       ! With less than Vol_direct [H ~> m or kg m-2], there is a direct
                            ! solution of a cubic equation for L.
@@ -732,6 +738,9 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
         if (bbl_thick < CS%BBL_thick_min) bbl_thick = CS%BBL_thick_min
       endif
 
+      ! Store the normalized bottom boundary layer volume.
+      if (CS%Channel_drag) Vol_bbl_chan = bbl_thick
+
       ! If there is Richardson number dependent mixing, that determines
       ! the vertical extent of the bottom boundary layer, and there is no
       ! need to set that scale here.  In fact, viscously reducing the
@@ -741,10 +750,16 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
       ! bbl_thick.
       if ((bbl_thick > 0.5*CS%Hbbl) .and. (CS%RiNo_mix)) bbl_thick = 0.5*CS%Hbbl
 
+      ! If drag is a body force, bbl_thick is HBBL
+      if (CS%body_force_drag) bbl_thick = h_bbl_drag(i)
+
       if (CS%Channel_drag) then
-        ! The drag within the bottommost bbl_thick is applied as a part of
+        ! The drag within the bottommost Vol_bbl_chan is applied as a part of
         ! an enhanced bottom viscosity, while above this the drag is applied
         ! directly to the layers in question as a Rayleigh drag term.
+
+        ! Restrict the volume over which the channel drag is applied.
+        if (CS%Chan_drag_max_vol >= 0.0) Vol_bbl_chan = min(Vol_bbl_chan, CS%Chan_drag_max_vol)
 
         !### The harmonic mean edge depths here are not invariant to offsets!
         if (m==1) then
@@ -864,7 +879,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
 
               use_L0 = .false.
               do_one_L_iter = .false.
-              if (CS%answers_2018) then
+              if (CS%answer_date < 20190101) then
                 curv_tol = GV%Angstrom_H*dV_dL2**2 &
                            * (0.25 * dV_dL2 * GV%Angstrom_H - a * L0 * dVol)
                 do_one_L_iter = (a * a * dVol**3) < curv_tol
@@ -927,8 +942,8 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
           ! Determine the drag contributing to the bottom boundary layer
           ! and the Rayleigh drag that acts on each layer.
           if (L(K) > L(K+1)) then
-            if (vol_below < bbl_thick) then
-              BBL_frac = (1.0-vol_below/bbl_thick)**2
+            if (vol_below < Vol_bbl_chan) then
+              BBL_frac = (1.0-vol_below/Vol_bbl_chan)**2
               BBL_visc_frac = BBL_visc_frac + BBL_frac*(L(K) - L(K+1))
             else
               BBL_frac = 0.0
@@ -1022,7 +1037,7 @@ subroutine set_viscous_BBL(u, v, h, tv, visc, G, GV, US, CS, pbv)
             visc%Ray_v(i,J,k) = visc%Ray_v(i,J,k) + (CS%cdrag*US%L_to_Z*umag_avg(i)) * h_bbl_fr
           endif
           h_sum = h_sum + h_at_vel(i,k)
-          if (h_sum >= bbl_thick) exit ! The top of this layer is above the drag zone.
+          if (h_sum >= h_bbl_drag(i)) exit ! The top of this layer is above the drag zone.
         enddo
         ! Do not enhance the near-bottom viscosity in this case.
         Kv_bbl = CS%Kv_BBL_min
@@ -1953,6 +1968,8 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
   real    :: omega_frac_dflt ! The default value for the fraction of the absolute rotation rate that
                              ! is used in place of the absolute value of the local Coriolis
                              ! parameter in the denominator of some expressions [nondim]
+  real    :: Chan_max_thick_dflt ! The default value for CHANNEL_DRAG_MAX_THICK [m]
+
   real    :: Z_rescale     ! A rescaling factor for heights from the representation in
                            ! a restart file to the internal representation in this run.
   real    :: I_T_rescale   ! A rescaling factor for time from the internal representation in this run
@@ -1961,7 +1978,11 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
                            ! representation in a restart file to the internal representation in this run.
   integer :: i, j, k, is, ie, js, je
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB, nz
-  logical :: default_2018_answers
+  integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
+  logical :: default_2018_answers ! The default setting for the various 2018_ANSWERS flags.
+  logical :: answers_2018  ! If true, use the order of arithmetic and expressions that recover the
+                           ! answers from the end of 2018.  Otherwise, use updated and more robust
+                           ! forms of the same expressions.
   logical :: adiabatic, use_omega, MLE_use_PBL_MLD
   logical :: use_KPP
   logical :: use_regridding  ! If true, use the ALE algorithm rather than layered
@@ -1987,13 +2008,25 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
   CS%RiNo_mix = .false.
   call get_param(param_file, mdl, "INPUTDIR", CS%inputdir, default=".")
   CS%inputdir = slasher(CS%inputdir)
+  call get_param(param_file, mdl, "DEFAULT_ANSWER_DATE", default_answer_date, &
+                 "This sets the default value for the various _ANSWER_DATE parameters.", &
+                 default=99991231)
   call get_param(param_file, mdl, "DEFAULT_2018_ANSWERS", default_2018_answers, &
                  "This sets the default value for the various _2018_ANSWERS parameters.", &
-                 default=.false.)
-  call get_param(param_file, mdl, "SET_VISC_2018_ANSWERS", CS%answers_2018, &
+                 default=(default_answer_date<20190101))
+  call get_param(param_file, mdl, "SET_VISC_2018_ANSWERS", answers_2018, &
                  "If true, use the order of arithmetic and expressions that recover the "//&
                  "answers from the end of 2018.  Otherwise, use updated and more robust "//&
                  "forms of the same expressions.", default=default_2018_answers)
+  ! Revise inconsistent default answer dates.
+  if (answers_2018 .and. (default_answer_date >= 20190101)) default_answer_date = 20181231
+  if (.not.answers_2018 .and. (default_answer_date < 20190101)) default_answer_date = 20190101
+  call get_param(param_file, mdl, "SET_VISC_ANSWER_DATE", CS%answer_date, &
+                 "The vintage of the order of arithmetic and expressions in the set viscosity "//&
+                 "calculations.  Values below 20190101 recover the answers from the end of 2018, "//&
+                 "while higher values use updated and more robust forms of the same expressions.  "//&
+                 "If both SET_VISC_2018_ANSWERS and SET_VISC_ANSWER_DATE are specified, "//&
+                 "the latter takes precedence.", default=default_answer_date)
   call get_param(param_file, mdl, "BOTTOMDRAGLAW", CS%bottomdraglaw, &
                  "If true, the bottom stress is calculated with a drag "//&
                  "law of the form c_drag*|u|*u. The velocity magnitude "//&
@@ -2003,7 +2036,8 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
   call get_param(param_file, mdl, "DRAG_AS_BODY_FORCE", CS%body_force_drag, &
                  "If true, the bottom stress is imposed as an explicit body force "//&
                  "applied over a fixed distance from the bottom, rather than as an "//&
-                 "implicit calculation based on an enhanced near-bottom viscosity", &
+                 "implicit calculation based on an enhanced near-bottom viscosity. "//&
+                 "The thickness of the bottom boundary layer is HBBL.", &
                  default=.false., do_not_log=.not.CS%bottomdraglaw)
   call get_param(param_file, mdl, "CHANNEL_DRAG", CS%Channel_drag, &
                  "If true, the bottom drag is exerted directly on each "//&
@@ -2016,10 +2050,9 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
                  do_not_log=.true.)
   if (adiabatic) then
     call log_param(param_file, mdl, "ADIABATIC",adiabatic, &
-                 "There are no diapycnal mass fluxes if ADIABATIC is "//&
-                 "true. This assumes that KD = KDML = 0.0 and that "//&
-                 "there is no buoyancy forcing, but makes the model "//&
-                 "faster by eliminating subroutine calls.", default=.false.)
+                 "There are no diapycnal mass fluxes if ADIABATIC is true.  "//&
+                 "This assumes that KD = 0.0 and that there is no buoyancy forcing, "//&
+                 "but makes the model faster by eliminating subroutine calls.", default=.false.)
   endif
 
   if (.not.adiabatic) then
@@ -2077,11 +2110,11 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
   endif
 
   call get_param(param_file, mdl, "HBBL", CS%Hbbl, &
-                 "The thickness of a bottom boundary layer with a "//&
-                 "viscosity of KVBBL if BOTTOMDRAGLAW is not defined, or "//&
-                 "the thickness over which near-bottom velocities are "//&
-                 "averaged for the drag law if BOTTOMDRAGLAW is defined "//&
-                 "but LINEAR_DRAG is not.", units="m", fail_if_missing=.true.) ! Rescaled later
+                 "The thickness of a bottom boundary layer with a viscosity increased by "//&
+                 "KV_EXTRA_BBL if BOTTOMDRAGLAW is not defined, or the thickness over which "//&
+                 "near-bottom velocities are averaged for the drag law if BOTTOMDRAGLAW is "//&
+                 "defined but LINEAR_DRAG is not.", &
+                 units="m", fail_if_missing=.true.) ! Rescaled later
   if (CS%bottomdraglaw) then
     call get_param(param_file, mdl, "CDRAG", CS%cdrag, &
                  "CDRAG is the drag coefficient relating the magnitude of "//&
@@ -2133,9 +2166,6 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
                  "The thickness over which near-surface velocities are "//&
                  "averaged for the drag law under an ice shelf.  By "//&
                  "default this is the same as HBBL", units="m", default=CS%Hbbl, scale=GV%m_to_H)
-  ! These unit conversions are out outside the get_param calls because the are also defaults.
-  CS%Hbbl = CS%Hbbl * GV%m_to_H                   ! Rescale
-  CS%BBL_thick_min = CS%BBL_thick_min * GV%m_to_H ! Rescale
 
   call get_param(param_file, mdl, "KV", Kv_background, &
                  "The background kinematic viscosity in the interior. "//&
@@ -2174,8 +2204,23 @@ subroutine set_visc_init(Time, G, GV, US, param_file, diag, visc, CS, restart_CS
     if (CS%c_Smag < 0.0) CS%c_Smag = 0.15
   endif
 
+  Chan_max_thick_dflt = -1.0
+  if (CS%RiNo_mix) Chan_max_thick_dflt = 0.5*CS%Hbbl
+  if (CS%body_force_drag) Chan_max_thick_dflt = CS%Hbbl
+  call get_param(param_file, mdl, "CHANNEL_DRAG_MAX_BBL_THICK", CS%Chan_drag_max_vol, &
+                 "The maximum bottom boundary layer thickness over which the channel drag is "//&
+                 "exerted, or a negative value for no fixed limit, instead basing the BBL "//&
+                 "thickness on the bottom stress, rotation and stratification.  The default is "//&
+                 "proportional to HBBL if USE_JACKSON_PARAM or DRAG_AS_BODY_FORCE is true.", &
+                 units="m", default=Chan_max_thick_dflt, scale=GV%m_to_H, &
+                 do_not_log=.not.CS%Channel_drag)
+
   call get_param(param_file, mdl, "MLE_USE_PBL_MLD", MLE_use_PBL_MLD, &
                  default=.false., do_not_log=.true.)
+
+  ! These unit conversions are out outside the get_param calls because they are also defaults.
+  CS%Hbbl = CS%Hbbl * GV%m_to_H                   ! Rescale
+  CS%BBL_thick_min = CS%BBL_thick_min * GV%m_to_H ! Rescale
 
   if (CS%RiNo_mix .and. kappa_shear_at_vertex(param_file)) then
     ! This is necessary for reproduciblity across restarts in non-symmetric mode.

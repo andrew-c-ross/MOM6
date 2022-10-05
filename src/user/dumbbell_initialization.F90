@@ -51,13 +51,13 @@ subroutine dumbbell_initialize_topography( D, G, param_file, max_depth )
   logical   :: dbrotate
 
   call get_param(param_file, mdl, "DUMBBELL_LEN",dblen, &
-                'Lateral Length scale for dumbbell.',&
+                'Lateral Length scale for dumbbell.', &
                  units='km', default=600., do_not_log=.false.)
   call get_param(param_file, mdl, "DUMBBELL_FRACTION",dbfrac, &
-                'Meridional fraction for narrow part of dumbbell.',&
+                'Meridional fraction for narrow part of dumbbell.', &
                  units='nondim', default=0.5, do_not_log=.false.)
   call get_param(param_file, mdl, "DUMBBELL_ROTATION", dbrotate, &
-                'Logical for rotation of dumbbell domain.',&
+                'Logical for rotation of dumbbell domain.', &
                  units='nondim', default=.false., do_not_log=.false.)
 
   if (G%x_axis_units == 'm') then
@@ -128,11 +128,11 @@ subroutine dumbbell_initialize_thickness ( h, depth_tot, G, GV, US, param_file, 
 
   if (.not.just_read) call log_version(param_file, mdl, version, "")
   call get_param(param_file, mdl,"MIN_THICKNESS", min_thickness, &
-                'Minimum thickness for layer',&
+                'Minimum thickness for layer', &
                  units='m', default=1.0e-3, scale=US%m_to_Z, do_not_log=just_read)
   call get_param(param_file, mdl,"REGRIDDING_COORDINATE_MODE", verticalCoordinate, &
                  default=DEFAULT_COORDINATE_MODE, do_not_log=just_read)
-  call get_param(param_file, mdl, "USE_REGRIDDING", use_ALE, do_not_log = .true.)
+  call get_param(param_file, mdl, "USE_REGRIDDING", use_ALE, default=.false., do_not_log=.true.)
   if (.not. use_ALE) verticalCoordinate = "LAYER"
 
   ! WARNING: this routine specifies the interface heights so that the last layer
@@ -149,7 +149,7 @@ subroutine dumbbell_initialize_thickness ( h, depth_tot, G, GV, US, param_file, 
   select case ( coordinateMode(verticalCoordinate) )
   case ( REGRIDDING_LAYER) ! Initial thicknesses for isopycnal coordinates
     call get_param(param_file, mdl, "DUMBBELL_ROTATION", dbrotate, &
-                'Logical for rotation of dumbbell domain.',&
+                'Logical for rotation of dumbbell domain.', &
                  units='nondim', default=.false., do_not_log=just_read)
     do j=js,je
       do i=is,ie
@@ -273,7 +273,7 @@ subroutine dumbbell_initialize_temperature_salinity ( T, S, h, G, GV, US, param_
   T_surf = 20.0*US%degC_to_C
 
   ! layer mode
-  call get_param(param_file, mdl, "USE_REGRIDDING", use_ALE, do_not_log = .true.)
+  call get_param(param_file, mdl, "USE_REGRIDDING", use_ALE, default=.false., do_not_log=.true.)
   if (.not. use_ALE) call MOM_error(FATAL,  "dumbbell_initialize_temperature_salinity: "//&
                "Please use 'fit' for 'TS_CONFIG' in the LAYER mode.")
 
@@ -357,10 +357,10 @@ subroutine dumbbell_initialize_sponges(G, GV, US, tv, h_in, depth_tot, param_fil
   logical :: dbrotate    ! If true, rotate the domain.
 
   call get_param(param_file, mdl,"DUMBBELL_LEN",dblen, &
-                'Lateral Length scale for dumbbell ',&
+                'Lateral Length scale for dumbbell ', &
                  units='km', default=600., do_not_log=.true.)
   call get_param(param_file, mdl, "DUMBBELL_ROTATION", dbrotate, &
-                'Logical for rotation of dumbbell domain.',&
+                'Logical for rotation of dumbbell domain.', &
                  units='nondim', default=.false., do_not_log=.true.)
 
   if (G%x_axis_units == 'm') then
@@ -379,7 +379,7 @@ subroutine dumbbell_initialize_sponges(G, GV, US, tv, h_in, depth_tot, param_fil
                  'DUMBBELL salinity range (right-left)', &
                  units='1e-3', default=2., scale=US%ppt_to_S, do_not_log=.true.)
   call get_param(param_file, mdl,"MIN_THICKNESS", min_thickness, &
-                'Minimum thickness for layer',&
+                'Minimum thickness for layer', &
                  units='m', default=1.0e-3, scale=US%m_to_Z, do_not_log=.true.)
 
   ! no active sponges
@@ -446,12 +446,13 @@ subroutine dumbbell_initialize_sponges(G, GV, US, tv, h_in, depth_tot, param_fil
         enddo
       endif
     enddo ; enddo
-  if (associated(tv%S)) call set_up_ALE_sponge_field(S, G, GV, tv%S, ACSp)
+  if (associated(tv%S)) call set_up_ALE_sponge_field(S, G, GV, tv%S, ACSp, 'salt', &
+                          sp_long_name='salinity', sp_unit='g kg-1 s-1')
  else
     do j=G%jsc,G%jec ; do i=G%isc,G%iec
       eta(i,j,1) = 0.0
       do k=2,nz
-        eta(i,j,k) = eta(i,j,k-1)- GV%H_to_Z * h_in(i,j,k-1)
+        eta(i,j,k) = eta(i,j,k-1) - GV%H_to_Z * h_in(i,j,k-1)
       enddo
       eta(i,j,nz+1) = -depth_tot(i,j)
       do k=1,nz

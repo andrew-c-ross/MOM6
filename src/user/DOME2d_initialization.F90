@@ -411,7 +411,7 @@ subroutine DOME2d_initialize_sponges(G, GV, US, tv, depth_tot, param_file, use_A
   call get_param(param_file, mdl, "DOME2D_SHELF_DEPTH", dome2d_depth_bay, &
                  default=0.2, do_not_log=.true.)
   call get_param(param_file, mdl, "S_REF", S_ref, default=35.0, scale=US%ppt_to_S)
-  call get_param(param_file, mdl, "T_REF", T_ref, scale=US%degC_to_C)
+  call get_param(param_file, mdl, "T_REF", T_ref, scale=US%degC_to_C, fail_if_missing=.false.)
   call get_param(param_file, mdl, "S_RANGE", S_range, default=2.0, scale=US%ppt_to_S)
   call get_param(param_file, mdl, "T_RANGE", T_range, default=0.0, scale=US%degC_to_C)
 
@@ -473,12 +473,10 @@ subroutine DOME2d_initialize_sponges(G, GV, US, tv, depth_tot, param_file, use_A
       enddo
     enddo ; enddo
 
-    if ( associated(tv%T) ) then
-      call set_up_ALE_sponge_field(T, G, GV, tv%T, ACSp)
-    endif
-    if ( associated(tv%S) ) then
-      call set_up_ALE_sponge_field(S, G, GV, tv%S, ACSp)
-    endif
+    if ( associated(tv%T) ) call set_up_ALE_sponge_field(T, G, GV, tv%T, ACSp, 'temp', &
+        sp_long_name='temperature', sp_unit='degC s-1')
+    if ( associated(tv%S) ) call set_up_ALE_sponge_field(S, G, GV, tv%S, ACSp, 'salt', &
+        sp_long_name='salinity', sp_unit='g kg-1 s-1')
 
   else
 
