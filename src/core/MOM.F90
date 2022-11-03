@@ -880,7 +880,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
         CS%Time = CS%Time - real_to_time(0.5*US%T_to_s*(dtdia-dt))
 
       ! Apply diabatic forcing, do mixing, and regrid.
-      call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
+      call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dt, &
                            Time_local, .false., Waves=Waves)
       CS%time_in_thermo_cycle = CS%time_in_thermo_cycle + dtdia
 
@@ -896,6 +896,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       if (dtdia > dt .and. .not. CS%use_diabatic_time_bug) &
         CS%Time = Time_start + real_to_time(US%T_to_s*(rel_time - 0.5*dt))
     endif
+
+    call do_ale_stuff(CS, G, GV, US, u, v, h, CS%tv, dtdia, Time_local)
 
     if (do_dyn) then
       call cpu_clock_begin(id_clock_dynamics)
@@ -1387,6 +1389,132 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
 
 end subroutine step_MOM_tracer_dyn
 
+subroutine do_ale_stuff(CS, G, GV, US, u, v, h, tv, dtdia, Time_end_thermo)
+
+  type(MOM_control_struct), intent(inout) :: CS     !< Master MOM control structure
+  type(ocean_grid_type),    intent(inout) :: G      !< ocean grid structure
+  type(verticalGrid_type),  intent(inout) :: GV     !< ocean vertical grid structure
+  type(unit_scale_type),    intent(in)    :: US     !< A dimensional unit scaling type
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                            intent(inout) :: u      !< zonal velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                            intent(inout) :: v      !< meridional velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                            intent(inout) :: h      !< layer thickness [H ~> m or kg m-2]
+  type(thermo_var_ptrs),    intent(inout) :: tv     !< A structure pointing to various thermodynamic variables
+  real,                     intent(in)    :: dtdia  !< The time interval over which to advance [T ~> s]
+  type(time_type),          intent(in)    :: Time_end_thermo !< End of averaging interval for thermo diags
+
+
+  real :: h_new(SZI_(G),SZJ_(G),SZK_(GV))      ! Layer thicknesses after regridding [H ~> m or kg m-2]
+  real :: dzRegrid(SZI_(G),SZJ_(G),SZK_(GV)+1) ! The change in grid interface positions due to regridding,
+                                               ! in the same units as thicknesses [H ~> m or kg m-2]
+  logical :: PCM_cell(SZI_(G),SZJ_(G),SZK_(GV)) ! If true, PCM remapping should be used in a cell.
+  logical :: use_ice_shelf ! Needed for selecting the right ALE interface.
+  logical :: showCallTree
+  type(group_pass_type) :: pass_T_S, pass_T_S_h, pass_uv_T_S_h
+  integer :: dynamics_stencil  ! The computational stencil for the calculations
+                               ! in the dynamic core.
+  integer :: i, j, k, is, ie, js, je, nz
+
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+  showCallTree = callTree_showQuery()
+  
+  if ( CS%use_ALE_algorithm ) then
+    call enable_averages(dtdia, Time_end_thermo, CS%diag)
+!         call pass_vector(u, v, G%Domain)
+    call cpu_clock_begin(id_clock_pass)
+    if (associated(tv%T)) &
+      call create_group_pass(pass_T_S_h, tv%T, G%Domain, To_All+Omit_Corners, halo=1)
+    if (associated(tv%S)) &
+      call create_group_pass(pass_T_S_h, tv%S, G%Domain, To_All+Omit_Corners, halo=1)
+    call create_group_pass(pass_T_S_h, h, G%Domain, To_All+Omit_Corners, halo=1)
+    call do_group_pass(pass_T_S_h, G%Domain)
+    call cpu_clock_end(id_clock_pass)
+
+    call preAle_tracer_diagnostics(CS%tracer_Reg, G, GV)
+
+    ! if (CS%debug) then
+    !   call MOM_state_chksum("Pre-ALE ", u, v, h, CS%uh, CS%vh, G, GV, US)
+    !   call hchksum(tv%T,"Pre-ALE T", G%HI, haloshift=1, scale=US%C_to_degC)
+    !   call hchksum(tv%S,"Pre-ALE S", G%HI, haloshift=1, scale=US%S_to_ppt)
+    !   call check_redundant("Pre-ALE ", u, v, G)
+    ! endif
+    call cpu_clock_begin(id_clock_ALE)
+
+    call pre_ALE_diagnostics(G, GV, US, h, u, v, tv, CS%ALE_CSp)
+    call ALE_update_regrid_weights(dtdia, CS%ALE_CSp)
+    ! Do any necessary adjustments ot the state prior to remapping.
+    call pre_ALE_adjustments(G, GV, US, h, tv, CS%tracer_Reg, CS%ALE_CSp, u, v)
+    ! Adjust the target grids for diagnostics, in case there have been thickness adjustments.
+    call diag_update_remap_grids(CS%diag)
+
+    if (use_ice_shelf) then
+      call ALE_regrid(G, GV, US, h, h_new, dzRegrid, tv, CS%ALE_CSp, CS%frac_shelf_h, PCM_cell)
+    else
+      call ALE_regrid(G, GV, US, h, h_new, dzRegrid, tv, CS%ALE_CSp, PCM_cell=PCM_cell)
+    endif
+
+    if (showCallTree) call callTree_waypoint("new grid generated")
+    ! Remap all variables from the old grid h onto the new grid h_new
+    call ALE_remap_tracers(CS%ALE_CSp, G, GV, h, h_new, CS%tracer_Reg, showCallTree, dtdia, PCM_cell)
+    call ALE_remap_velocities(CS%ALE_CSp, G, GV, h, h_new, u, v, CS%OBC, dzRegrid, showCallTree, dtdia)
+
+    ! Replace the old grid with new one.  All remapping must be done by this point in the code.
+    !$OMP parallel do default(shared)
+    do k=1,nz ; do j=js-1,je+1 ; do i=is-1,ie+1
+      h(i,j,k) = h_new(i,j,k)
+    enddo ; enddo ; enddo
+
+    if (showCallTree) call callTree_waypoint("finished ALE_regrid (step_MOM_thermo)")
+    call cpu_clock_end(id_clock_ALE)
+  endif   ! endif for the block "if ( CS%use_ALE_algorithm )"
+
+  dynamics_stencil = min(3, G%Domain%nihalo, G%Domain%njhalo)
+  call create_group_pass(pass_uv_T_S_h, u, v, G%Domain, halo=dynamics_stencil)
+  if (associated(tv%T)) &
+    call create_group_pass(pass_uv_T_S_h, tv%T, G%Domain, halo=dynamics_stencil)
+  if (associated(tv%S)) &
+    call create_group_pass(pass_uv_T_S_h, tv%S, G%Domain, halo=dynamics_stencil)
+  call create_group_pass(pass_uv_T_S_h, h, G%Domain, halo=dynamics_stencil)
+  call do_group_pass(pass_uv_T_S_h, G%Domain, clock=id_clock_pass)
+
+  ! if (CS%debug .and. CS%use_ALE_algorithm) then
+  !   call MOM_state_chksum("Post-ALE ", u, v, h, CS%uh, CS%vh, G, GV, US)
+  !   call hchksum(tv%T, "Post-ALE T", G%HI, haloshift=1, scale=US%C_to_degC)
+  !   call hchksum(tv%S, "Post-ALE S", G%HI, haloshift=1, scale=US%S_to_ppt)
+  !   call check_redundant("Post-ALE ", u, v, G)
+  ! endif
+
+  ! Whenever thickness changes let the diag manager know, target grids
+  ! for vertical remapping may need to be regenerated. This needs to
+  ! happen after the H update and before the next post_data.
+  call diag_update_remap_grids(CS%diag)
+
+  !### Consider moving this up into the if ALE block.
+  call postALE_tracer_diagnostics(CS%tracer_Reg, G, GV, CS%diag, dtdia)
+
+  ! if (CS%debug) then
+  !   call uvchksum("Post-diabatic u", u, v, G%HI, haloshift=2, scale=US%L_T_to_m_s)
+  !   call hchksum(h, "Post-diabatic h", G%HI, haloshift=1, scale=GV%H_to_m)
+  !   call uvchksum("Post-diabatic [uv]h", CS%uhtr, CS%vhtr, G%HI, &
+  !                 haloshift=0, scale=GV%H_to_m*US%L_to_m**2)
+  ! ! call MOM_state_chksum("Post-diabatic ", u, v, &
+  ! !                       h, CS%uhtr, CS%vhtr, G, GV, haloshift=1)
+  !   if (associated(tv%T)) call hchksum(tv%T, "Post-diabatic T", G%HI, haloshift=1, scale=US%C_to_degC)
+  !   if (associated(tv%S)) call hchksum(tv%S, "Post-diabatic S", G%HI, haloshift=1, scale=US%S_to_ppt)
+  !   if (associated(tv%frazil)) call hchksum(tv%frazil, "Post-diabatic frazil", G%HI, haloshift=0, &
+  !                                           scale=US%Q_to_J_kg*US%RZ_to_kg_m2)
+  !   if (associated(tv%salt_deficit)) call hchksum(tv%salt_deficit, &
+  !                            "Post-diabatic salt deficit", G%HI, haloshift=0, scale=US%RZ_to_kg_m2)
+  ! ! call MOM_thermo_chksum("Post-diabatic ", tv, G, US)
+  !   call check_redundant("Post-diabatic ", u, v, G)
+  ! endif
+  call disable_averaging(CS%diag)
+
+end subroutine do_ale_stuff
+
+
 !> MOM_step_thermo orchestrates the thermodynamic time stepping and vertical
 !! remapping, via calls to diabatic (or adiabatic) and ALE_regrid.
 subroutine step_MOM_thermo(CS, G, GV, US, u, v, h, tv, fluxes, dtdia, &
@@ -1488,101 +1616,6 @@ subroutine step_MOM_thermo(CS, G, GV, US, u, v, h, tv, fluxes, dtdia, &
     fluxes%fluxes_used = .true.
 
     if (showCallTree) call callTree_waypoint("finished diabatic (step_MOM_thermo)")
-
-    ! Regridding/remapping is done here, at end of thermodynamics time step
-    ! (that may comprise several dynamical time steps)
-    ! The routine 'ALE_regrid' can be found in 'MOM_ALE.F90'.
-    if ( CS%use_ALE_algorithm ) then
-      call enable_averages(dtdia, Time_end_thermo, CS%diag)
-!         call pass_vector(u, v, G%Domain)
-      call cpu_clock_begin(id_clock_pass)
-      if (associated(tv%T)) &
-        call create_group_pass(pass_T_S_h, tv%T, G%Domain, To_All+Omit_Corners, halo=1)
-      if (associated(tv%S)) &
-        call create_group_pass(pass_T_S_h, tv%S, G%Domain, To_All+Omit_Corners, halo=1)
-      call create_group_pass(pass_T_S_h, h, G%Domain, To_All+Omit_Corners, halo=1)
-      call do_group_pass(pass_T_S_h, G%Domain)
-      call cpu_clock_end(id_clock_pass)
-
-      call preAle_tracer_diagnostics(CS%tracer_Reg, G, GV)
-
-      if (CS%debug) then
-        call MOM_state_chksum("Pre-ALE ", u, v, h, CS%uh, CS%vh, G, GV, US)
-        call hchksum(tv%T,"Pre-ALE T", G%HI, haloshift=1, scale=US%C_to_degC)
-        call hchksum(tv%S,"Pre-ALE S", G%HI, haloshift=1, scale=US%S_to_ppt)
-        call check_redundant("Pre-ALE ", u, v, G)
-      endif
-      call cpu_clock_begin(id_clock_ALE)
-
-      call pre_ALE_diagnostics(G, GV, US, h, u, v, tv, CS%ALE_CSp)
-      call ALE_update_regrid_weights(dtdia, CS%ALE_CSp)
-      ! Do any necessary adjustments ot the state prior to remapping.
-      call pre_ALE_adjustments(G, GV, US, h, tv, CS%tracer_Reg, CS%ALE_CSp, u, v)
-      ! Adjust the target grids for diagnostics, in case there have been thickness adjustments.
-      call diag_update_remap_grids(CS%diag)
-
-      if (use_ice_shelf) then
-        call ALE_regrid(G, GV, US, h, h_new, dzRegrid, tv, CS%ALE_CSp, CS%frac_shelf_h, PCM_cell)
-      else
-        call ALE_regrid(G, GV, US, h, h_new, dzRegrid, tv, CS%ALE_CSp, PCM_cell=PCM_cell)
-      endif
-
-      if (showCallTree) call callTree_waypoint("new grid generated")
-      ! Remap all variables from the old grid h onto the new grid h_new
-      call ALE_remap_tracers(CS%ALE_CSp, G, GV, h, h_new, CS%tracer_Reg, showCallTree, dtdia, PCM_cell)
-      call ALE_remap_velocities(CS%ALE_CSp, G, GV, h, h_new, u, v, CS%OBC, dzRegrid, showCallTree, dtdia)
-
-      ! Replace the old grid with new one.  All remapping must be done by this point in the code.
-      !$OMP parallel do default(shared)
-      do k=1,nz ; do j=js-1,je+1 ; do i=is-1,ie+1
-        h(i,j,k) = h_new(i,j,k)
-      enddo ; enddo ; enddo
-
-      if (showCallTree) call callTree_waypoint("finished ALE_regrid (step_MOM_thermo)")
-      call cpu_clock_end(id_clock_ALE)
-    endif   ! endif for the block "if ( CS%use_ALE_algorithm )"
-
-    dynamics_stencil = min(3, G%Domain%nihalo, G%Domain%njhalo)
-    call create_group_pass(pass_uv_T_S_h, u, v, G%Domain, halo=dynamics_stencil)
-    if (associated(tv%T)) &
-      call create_group_pass(pass_uv_T_S_h, tv%T, G%Domain, halo=dynamics_stencil)
-    if (associated(tv%S)) &
-      call create_group_pass(pass_uv_T_S_h, tv%S, G%Domain, halo=dynamics_stencil)
-    call create_group_pass(pass_uv_T_S_h, h, G%Domain, halo=dynamics_stencil)
-    call do_group_pass(pass_uv_T_S_h, G%Domain, clock=id_clock_pass)
-
-    if (CS%debug .and. CS%use_ALE_algorithm) then
-      call MOM_state_chksum("Post-ALE ", u, v, h, CS%uh, CS%vh, G, GV, US)
-      call hchksum(tv%T, "Post-ALE T", G%HI, haloshift=1, scale=US%C_to_degC)
-      call hchksum(tv%S, "Post-ALE S", G%HI, haloshift=1, scale=US%S_to_ppt)
-      call check_redundant("Post-ALE ", u, v, G)
-    endif
-
-    ! Whenever thickness changes let the diag manager know, target grids
-    ! for vertical remapping may need to be regenerated. This needs to
-    ! happen after the H update and before the next post_data.
-    call diag_update_remap_grids(CS%diag)
-
-    !### Consider moving this up into the if ALE block.
-    call postALE_tracer_diagnostics(CS%tracer_Reg, G, GV, CS%diag, dtdia)
-
-    if (CS%debug) then
-      call uvchksum("Post-diabatic u", u, v, G%HI, haloshift=2, scale=US%L_T_to_m_s)
-      call hchksum(h, "Post-diabatic h", G%HI, haloshift=1, scale=GV%H_to_m)
-      call uvchksum("Post-diabatic [uv]h", CS%uhtr, CS%vhtr, G%HI, &
-                    haloshift=0, scale=GV%H_to_m*US%L_to_m**2)
-    ! call MOM_state_chksum("Post-diabatic ", u, v, &
-    !                       h, CS%uhtr, CS%vhtr, G, GV, haloshift=1)
-      if (associated(tv%T)) call hchksum(tv%T, "Post-diabatic T", G%HI, haloshift=1, scale=US%C_to_degC)
-      if (associated(tv%S)) call hchksum(tv%S, "Post-diabatic S", G%HI, haloshift=1, scale=US%S_to_ppt)
-      if (associated(tv%frazil)) call hchksum(tv%frazil, "Post-diabatic frazil", G%HI, haloshift=0, &
-                                              scale=US%Q_to_J_kg*US%RZ_to_kg_m2)
-      if (associated(tv%salt_deficit)) call hchksum(tv%salt_deficit, &
-                               "Post-diabatic salt deficit", G%HI, haloshift=0, scale=US%RZ_to_kg_m2)
-    ! call MOM_thermo_chksum("Post-diabatic ", tv, G, US)
-      call check_redundant("Post-diabatic ", u, v, G)
-    endif
-    call disable_averaging(CS%diag)
 
     call cpu_clock_end(id_clock_diabatic)
   else   ! complement of "if (.not.CS%adiabatic)"
