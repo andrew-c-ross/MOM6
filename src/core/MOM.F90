@@ -880,7 +880,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
         CS%Time = CS%Time - real_to_time(0.5*US%T_to_s*(dtdia-dt))
 
       ! Apply diabatic forcing, do mixing, and regrid.
-      call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dt, &
+      call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
                            Time_local, .false., Waves=Waves)
       CS%time_in_thermo_cycle = CS%time_in_thermo_cycle + dtdia
 
@@ -897,7 +897,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
         CS%Time = Time_start + real_to_time(US%T_to_s*(rel_time - 0.5*dt))
     endif
 
-    call do_ale_stuff(CS, G, GV, US, u, v, h, CS%tv, dtdia, Time_local)
+    call do_ale_stuff(CS, G, GV, US, u, v, h, CS%tv, dt, Time_local)
 
     if (do_dyn) then
       call cpu_clock_begin(id_clock_dynamics)
