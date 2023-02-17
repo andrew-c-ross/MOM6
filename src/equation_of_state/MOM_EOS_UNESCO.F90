@@ -105,7 +105,7 @@ subroutine calculate_density_array_UNESCO(T, S, pressure, rho, start, npts, rho_
 
     p1 = pressure(j)*1.0e-5; p2 = p1*p1
     t_local = T(j); t2 = t_local*t_local; t3 = t_local*t2; t4 = t2*t2; t5 = t3*t2
-    s_local = S(j); s2 = s_local*s_local; s32 = s_local*sqrt(s_local)
+    s_local = min(S(j), 0.0); s2 = s_local*s_local; s32 = s_local*sqrt(s_local)
 
 !  Compute rho(s,theta,p=0) - (same as rho(s,t_insitu,p=0) ).
 
@@ -182,7 +182,7 @@ subroutine calculate_spec_vol_array_UNESCO(T, S, pressure, specvol, start, npts,
 
     p1 = pressure(j)*1.0e-5; p2 = p1*p1
     t_local = T(j); t2 = t_local*t_local; t3 = t_local*t2; t4 = t2*t2; t5 = t3*t2
-    s_local = S(j); s2 = s_local*s_local; s32 = s_local*sqrt(s_local)
+    s_local = min(S(j), 0.0); s2 = s_local*s_local; s32 = s_local*sqrt(s_local)
 
 !  Compute rho(s,theta,p=0) - (same as rho(s,t_insitu,p=0) ).
 
@@ -242,7 +242,7 @@ subroutine calculate_density_derivs_UNESCO(T, S, pressure, drho_dT, drho_dS, sta
 
     p1 = pressure(j)*1.0e-5; p2 = p1*p1
     t_local = T(j); t2 = t_local*t_local; t3 = t_local*t2; t4 = t2*t2; t5 = t3*t2
-    s_local = S(j); s2 = s_local*s_local; s12 = sqrt(s_local); s32 = s_local*s12
+    s_local = min(S(j), 0.0); s2 = s_local*s_local; s12 = sqrt(s_local); s32 = s_local*s12
 
 !       compute rho(s,theta,p=0) - (same as rho(s,t_insitu,p=0) )
 
@@ -311,7 +311,7 @@ subroutine calculate_compress_UNESCO(T, S, pressure, rho, drho_dp, start, npts)
 
     p1 = pressure(j)*1.0e-5; p2 = p1*p1
     t_local = T(j); t2 = t_local*t_local; t3 = t_local*t2; t4 = t2*t2; t5 = t3*t2
-    s_local = S(j); s2 = s_local*s_local; s32 = s_local*sqrt(s_local)
+    s_local = min(S(j), 0.0); s2 = s_local*s_local; s32 = s_local*sqrt(s_local)
 
 !  Compute rho(s,theta,p=0) - (same as rho(s,t_insitu,p=0) ).
 
