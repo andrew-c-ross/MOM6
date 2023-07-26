@@ -515,12 +515,12 @@ subroutine tidal_forcing_init(Time, G, US, param_file, CS)
       call find_in_files(tidal_input_files, "PHASE_SAL_"//trim(CS%const_name(c)), phase, G)
       call find_in_files(tidal_input_files, "AMP_SAL_"//trim(CS%const_name(c)), CS%ampsal(:,:,c), &
                          G, scale=US%m_to_Z)
-      call pass_var(phase,           G%domain,complete=.false.)
+      ! call pass_var(phase,           G%domain,complete=.false.)
+      CS%cosphasesal(:, :, c) = cos(phase(:, :) * deg_to_rad)             
+      CS%sinphasesal(:, :, c) = sin(phase(:, :) * deg_to_rad)             
+      call pass_var(CS%cosphasesal(:,:,c),G%domain,complete=.false.)
+      call pass_var(CS%sinphasesal(:,:,c),G%domain,complete=.false.)
       call pass_var(CS%ampsal(:,:,c),G%domain,complete=.true.)
-      do j=js-1,je+1 ; do i=is-1,ie+1
-        CS%cosphasesal(i,j,c) = cos(phase(i,j)*deg_to_rad)
-        CS%sinphasesal(i,j,c) = sin(phase(i,j)*deg_to_rad)
-      enddo ; enddo
     enddo
   endif
 
