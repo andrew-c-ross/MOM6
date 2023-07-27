@@ -720,8 +720,8 @@ subroutine calc_tidal_forcing(Time, eta, eta_tidal, G, US, CS)
   enddo
 
   if (CS%tidal_sal_from_file) then ; do c=1,CS%nc
-    cosomegat = cos(CS%freq(c)*now)
-    sinomegat = sin(CS%freq(c)*now)
+    cosomegat = cos(CS%freq(c)*now)+ CS%phase0(c)
+    sinomegat = sin(CS%freq(c)*now + CS%phase0(c))
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       eta_tidal(i,j) = eta_tidal(i,j) + CS%ampsal(i,j,c) * &
            (cosomegat*CS%cosphasesal(i,j,c) + sinomegat*CS%sinphasesal(i,j,c))
@@ -729,8 +729,8 @@ subroutine calc_tidal_forcing(Time, eta, eta_tidal, G, US, CS)
   enddo ; endif
 
   if (CS%USE_PREV_TIDES) then ; do c=1,CS%nc
-    cosomegat = cos(CS%freq(c)*now)
-    sinomegat = sin(CS%freq(c)*now)
+    cosomegat = cos(CS%freq(c)*now + CS%phase0(c))
+    sinomegat = sin(CS%freq(c)*now + CS%phase0(c))
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       eta_tidal(i,j) = eta_tidal(i,j) - CS%SAL_SCALAR*CS%amp_prev(i,j,c) * &
           (cosomegat*CS%cosphase_prev(i,j,c) + sinomegat*CS%sinphase_prev(i,j,c))
