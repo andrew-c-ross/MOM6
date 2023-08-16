@@ -105,7 +105,7 @@ contains
 !! on the acceptable time increment.
 subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online_flag, read_khdt_x, read_khdt_y)
   type(ocean_grid_type),      intent(inout) :: G       !< Grid type
-  type(verticalGrid_type),    intent(in)    :: GV      !< ocean vertical grid structure
+  type(verticalGrid_type),    intent(in)    :: GV      !< ocean vertical grid structure 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                               intent(in)    :: h       !< Layer thickness [H ~> m or kg m-2]
   real,                       intent(in)    :: dt      !< time step [T ~> s]
@@ -385,6 +385,13 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
     if (associated(Reg%Tr(m)%df2d_y)) then
       do J=js-1,je ; do i=is,ie ; Reg%Tr(m)%df2d_y(i,J) = 0.0 ; enddo ; enddo
     endif
+    ! mpoupon
+    if (associated(Reg%Tr(m)%diffusionc_xy)) then
+      do k=1,nz ; do j=js,je ; do i=is,ie
+        Reg%Tr(m)%diffusionc_xy(i,j,k) = 0.0
+      enddo ; enddo ; enddo
+    endif
+    ! mpoupon
   enddo
 
   if (CS%use_lateral_boundary_diffusion) then
@@ -508,6 +515,11 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
           enddo ; enddo ; endif
           do j=js,je ; do i=is,ie
             Reg%Tr(m)%t(i,j,k) = Reg%Tr(m)%t(i,j,k) + dTr(i,j)
+            ! mpoupon
+            if (associated(Reg%Tr(m)%diffusionc_xy)) then
+                Reg%Tr(m)%diffusionc_xy(i,j,k) = dTr(i,j) * Idt
+            endif
+            ! mpoupon
           enddo ; enddo
         enddo
 
