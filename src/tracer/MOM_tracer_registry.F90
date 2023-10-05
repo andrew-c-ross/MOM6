@@ -54,7 +54,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                            net_surfflux_longname, tr_desc, OBC_inflow, OBC_in_u, OBC_in_v, ad_x, ad_y, &
                            df_x, df_y, ad_2d_x, ad_2d_y, df_2d_x, df_2d_y, advection_xy, registry_diags, &
                            advectionc_xy, advectionc_x, advectionc_y, & !liao
-                           diffusionc_xy, & ! mpoupon
+                           diffusionc_xy, diffusion_xy, & ! mpoupon
                            conc_scale, flux_nameroot, flux_longname, flux_units, flux_scale, &
                            convergence_units, convergence_scale, cmor_tendprefix, diag_form, &
                            restart_CS, mandatory, underflow_conc, Tr_out)
@@ -103,6 +103,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
   real, dimension(:,:,:), optional, pointer     :: advection_xy !< convergence of lateral advective tracer fluxes
   real, dimension(:,:,:), optional, pointer     :: advectionc_xy !< convergence of lateral advection !liao
   real, dimension(:,:,:), optional, pointer     :: diffusionc_xy !< convergence of lateral diffusion !mpoupon
+  real, dimension(:,:,:), optional, pointer     :: diffusion_xy !< convergence of lateral diffusive tracer fluxes !mpoupon
   real, dimension(:,:,:), optional, pointer     :: advectionc_x !< lateral advection concentration !liao
   real, dimension(:,:,:), optional, pointer     :: advectionc_y !< lateral advection concentration !liao
 
@@ -251,6 +252,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
   if (present(advection_xy)) then ; if (associated(advection_xy)) Tr%advection_xy => advection_xy ; endif
   if (present(advectionc_xy)) then; if (associated(advectionc_xy)) Tr%advectionc_xy => advectionc_xy ; endif !liao  
   if (present(diffusionc_xy)) then; if (associated(diffusionc_xy)) Tr%diffusionc_xy => diffusionc_xy ; endif !mpoupon
+  if (present(diffusion_xy)) then;  if (associated(diffusion_xy)) Tr%diffusion_xy  => diffusion_xy ;  endif !mpoupon
   if (present(advectionc_x)) then;  if (associated(advectionc_x)) Tr%advectionc_x  => advectionc_x ;  endif !liao
   if (present(advectionc_y)) then;  if (associated(advectionc_y)) Tr%advectionc_y  => advectionc_y ;  endif !liao
 
@@ -463,6 +465,9 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
     Tr%id_difc_xy = register_diag_field('ocean_model',trim(shortnm)//"_diffusionc_xy", &
         diag%axesTL, Time, "Horizontal convergence of residual mean diffusive fluxes of "//trim(shortnm), &
         trim(units)//' s-1')
+    Tr%id_dif_xy = register_diag_field('ocean_model',trim(shortnm)//"_diffusion_xy", &
+        diag%axesTL, Time, "Horizontal convergence of residual mean diffusive fluxes of "//trim(shortnm), &
+        trim(units)//' s-1')
     ! mpoupon
     !liao
     Tr%id_advc_xy = register_diag_field('ocean_model',trim(shortnm)//"_advectionc_xy", &
@@ -484,6 +489,8 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
     !mpoupon
     if (Tr%id_difc_xy > 0) &
       call safe_alloc_ptr(Tr%diffusionc_xy,isd,ied,jsd,jed,nz)
+    if (Tr%id_dif_xy > 0) &
+      call safe_alloc_ptr(Tr%diffusion_xy,isd,ied,jsd,jed,nz)
     !mpoupon
     !liao
     if (Tr%id_advc_xy > 0) &
@@ -788,6 +795,7 @@ subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
     if (Tr%id_adv_xy > 0) call post_data(Tr%id_adv_xy, Tr%advection_xy, diag, alt_h=h_diag)
     if (Tr%id_advc_xy > 0) call post_data(Tr%id_advc_xy, Tr%advectionc_xy, diag, alt_h=h_diag) !liao
     if (Tr%id_difc_xy > 0) call post_data(Tr%id_difc_xy, Tr%diffusionc_xy, diag, alt_h=h_diag) !mpoupon
+    if (Tr%id_dif_xy > 0) call post_data(Tr%id_dif_xy, Tr%diffusion_xy, diag, alt_h=h_diag) !mpoupon
     if (Tr%id_advc_x > 0)  call post_data(Tr%id_advc_x, Tr%advectionc_x, diag, alt_h=h_diag) !liao
     if (Tr%id_advc_y > 0)  call post_data(Tr%id_advc_y, Tr%advectionc_y, diag, alt_h=h_diag) !liao
     if (Tr%id_adv_xy_2d > 0) then
