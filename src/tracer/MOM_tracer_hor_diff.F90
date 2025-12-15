@@ -610,7 +610,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
                 Reg%Tr(m)%diffusionc_xy(i,j,k) = dTr(i,j) * Idt
             endif
             if (associated(Reg%Tr(m)%diffusion_xy)) then
-                Reg%Tr(m)%diffusion_xy(i,j,k) = dTr(i,j) * Idt * (h(i,j,k)+h_neglect)
+                Reg%Tr(m)%diffusion_xy(i,j,k) = Reg%Tr(m)%diffusion_xy(i,j,k) + dTr(i,j) * Idt * (h(i,j,k)+h_neglect)
             endif
           enddo ; enddo
         enddo
