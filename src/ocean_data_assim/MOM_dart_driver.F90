@@ -14,7 +14,7 @@ use MOM_verticalGrid, only : verticalGrid_type
 
 use mpp_mod, only: mpp_declare_pelist ! TODO: replace with wrap
 
-use filter_mod, only: filter_online_init, filter_online_assim
+use filter_mod, only: online_filter_init, online_filter_assim
 
 implicit none; private
 public :: dart_CS, dart_init, dart_assim_step, dart_end
@@ -72,7 +72,7 @@ subroutine dart_init(G, GV, param_file, CS)
   CS%nz = GV%ke
 
   if (is_root_PE()) then
-    call filter_online_init(dart_comm, CS%model_size)
+    call online_filter_init(dart_comm, CS%model_size)
     if (CS%model_size .ne. 2_8 * CS%nxg * CS%nyg * CS%nz) then
       ! Factor of 2 accounts for 2 variables (T and S). If size disagrees
       ! DART could be trying to assimilate more variables (change in input.nml).
@@ -112,7 +112,7 @@ subroutine dart_assim_step(Time, G, GV, US, tv, CS)
 
   ! TODO: assim step here
   if (is_root_PE()) then
-    call filter_online_assim(CS%X, year, month, day, hr, min, sec, trim(obs_file))
+    call online_filter_assim(CS%X, year, month, day, hr, min, sec, trim(obs_file))
   endif
 
   call scatter_t(G, tv%S, US%S_to_ppt, 0, CS, global_2d, floor_zero=.true.) ! offset 0 (salinity is first)
