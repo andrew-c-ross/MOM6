@@ -176,7 +176,7 @@ use MOM_database_comms,       only : dbcomms_CS_type, database_comms_init, dbcli
 use MOM_oda_driver_mod,        only : ODA_CS, oda, init_oda, oda_end
 use MOM_oda_driver_mod,        only : set_prior_tracer, set_analysis_time, apply_oda_tracer_increments
 use MOM_oda_incupd,            only : oda_incupd_CS, init_oda_incupd_diags
-use MOM_dart_driver,           only : dart_CS, dart_init, dart_assim_step, dart_end
+use MOM_dart_driver,           only : dart_CS, dart_init,  dart_assim_step, dart_end
 
 ! Offline modules
 use MOM_offline_main,          only : offline_transport_CS, offline_transport_init, update_offline_fields
@@ -1136,7 +1136,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
   endif
 
   if (CS%use_dart) then
-    if (MOM_state_is_synchronized(CS)) call dart_assim_step(CS%Time, G, GV, US, CS%tv, CS%dartCS)
+    if (MOM_state_is_synchronized(CS)) call dart_assim_step(Time_local, G, GV, US, CS%tv, CS%dartCS)
   endif
 
   if (showCallTree) call callTree_waypoint("calling extract_surface_state (step_MOM)")
@@ -3926,7 +3926,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   endif
 
   if (CS%use_dart) then
-    call dart_init(G, GV, param_file, CS%dartCS)
+    call dart_init(G, GV, US, Time, CS%diag, param_file, CS%dartCS)
   endif
 
   ! initialize stochastic physics

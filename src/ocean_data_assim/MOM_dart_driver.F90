@@ -1,6 +1,8 @@
 module MOM_dart_driver
 
 use MOM_coms, only : set_PElist, broadcast, root_PE
+use MOM_diag_mediator, only : diag_ctrl, register_diag_field, post_data
+use MOM_diag_mediator, only : enable_averaging, disable_averaging
 use MOM_domains, only : global_field, pass_var
 use MOM_ensemble_manager, only : get_ensemble_id, get_ensemble_size
 use MOM_ensemble_manager, only : get_ensemble_pelist, get_ensemble_filter_pelist
@@ -23,19 +25,24 @@ character(len=40)  :: mdl = "MOM_dart_driver"
 #include <MOM_memory.h>
 
 type :: dart_CS
-  integer :: nk = 1
   integer :: interval_sec
   integer(kind=8) :: nxg, nyg, nz
   integer(kind=8) :: model_size
   character(len=200) :: obs_dir
   real(kind=8), dimension(:), allocatable :: X
+  type(diag_ctrl), pointer           :: diag !<structure to regulate output
+  integer :: id_T_DART_incr = -1
+  integer :: id_S_DART_incr = -1
 end type
 
 contains
 
-subroutine dart_init(G, GV, param_file, CS)
+subroutine dart_init(G, GV, US, Time, diag, param_file, CS)
   type(ocean_grid_type), pointer :: G  !< ocean grid structure
   type(verticalGrid_type), intent(in) :: GV !< Pointer to DA vrtical grid
+  type(unit_scale_type), intent(in) :: US !< A dimensional unit scaling type
+  type(time_type), target, intent(in)    :: Time !< The current model time
+  type(diag_ctrl), target, intent(inout) :: diag 
   type(param_file_type), intent(in) :: param_file
   type(dart_CS), pointer :: CS
 
@@ -83,6 +90,12 @@ subroutine dart_init(G, GV, param_file, CS)
     allocate(CS%X(CS%model_size))
   endif
 
+  CS%diag => diag
+  CS%id_T_DART_incr = register_diag_field('ocean_model', 'T_dart_incr', diag%axesTL, Time, &
+      'Temperature before DART step', 'degC', conversion=US%C_to_degC)
+  CS%id_S_DART_incr = register_diag_field('ocean_model', 'S_dart_incr', diag%axesTL, Time, &
+      'Salinity before DART step', 'PSU', conversion=US%S_to_ppt)
+
 end subroutine dart_init
 
 subroutine dart_assim_step(Time, G, GV, US, tv, CS)
@@ -93,15 +106,30 @@ subroutine dart_assim_step(Time, G, GV, US, tv, CS)
   type(thermo_var_ptrs), intent(in) :: tv   !< A structure pointing to various thermodynamic variables
   type(dart_CS), pointer :: CS
 
+  real, dimension(:, :, :), allocatable :: T_incr, S_incr
+
   integer :: nxy
   real, dimension(:, :), allocatable :: global_2d
   integer :: year, month, day, hr, min, sec
   character(len=300) :: obs_file
 
   call get_time(Time, sec, day)
-  if (mod(sec, CS%interval_sec) .ne. 0) return
+  if (mod(sec, CS%interval_sec) .ne. 0) then
+    write(*,*) 'not running assim, sec=', sec
+    return
+  endif
+  write(*, *) 'Running assim step, sec=', sec
   call get_date(Time, year, month, day, hr, min, sec)
   write(obs_file, '(a,"/obs_seq.",i4.4,3i2.2,".out")') trim(CS%obs_dir), year, month, day, hr
+
+  if (CS%id_T_DART_incr > 0) then
+    allocate(T_incr(SZI_(G), SZJ_(G), CS%nz))
+    T_incr(:,:,:) = tv%T(:,:,:)
+  endif
+  if (CS%id_S_DART_incr > 0) then
+    allocate(S_incr(SZI_(G), SZJ_(G), CS%nz))
+    S_incr(:,:,:) = tv%S(:,:,:)
+  endif
 
   ! Total horizontal grid size
   nxy = CS%nxg * CS%nyg
@@ -110,7 +138,6 @@ subroutine dart_assim_step(Time, G, GV, US, tv, CS)
   call gather_t(G, tv%S, US%S_to_ppt, 0, CS, global_2d) ! offset 0 (salinity is first)
   call gather_t(G, tv%T, US%C_to_degC, nxy*CS%nz, CS, global_2d) ! temperature second
 
-  ! TODO: assim step here
   if (is_root_PE()) then
     call online_filter_assim(CS%X, year, month, day, hr, min, sec, trim(obs_file))
   endif
@@ -121,14 +148,23 @@ subroutine dart_assim_step(Time, G, GV, US, tv, CS)
   call pass_var(tv%T, G%Domain)
   call pass_var(tv%S, G%Domain)
 
-  deallocate(global_2d)
+  call enable_averaging(real(CS%interval_sec), Time, CS%diag)
+  if (CS%id_T_DART_incr > 0) then
+    T_incr(:,:,:) = tv%T(:,:,:) - T_incr(:,:,:)
+    call post_data(CS%id_T_DART_incr, T_incr, CS%diag)
+  endif
+  if (CS%id_S_DART_incr > 0) then
+    S_incr(:,:,:) = tv%S(:,:,:) - S_incr(:,:,:)
+    call post_data(CS%id_S_DART_incr, S_incr, CS%diag)
+  endif
+  call disable_averaging(CS%diag)
 
 end subroutine dart_assim_step
 
 subroutine gather_t(G, a, scale, off, CS, global_2d)
   type(ocean_grid_type), pointer :: G  !< ocean grid structure
   type(dart_CS), pointer :: CS
-  real, dimension(SZI_(G),SZJ_(G), CS%nk), intent(in) :: a
+  real, dimension(SZI_(G),SZJ_(G), CS%nz), intent(in) :: a
   real :: scale
   integer, intent(in) :: off
   real, intent(inout), dimension(:, :) :: global_2d
@@ -148,7 +184,7 @@ end subroutine gather_t
 subroutine scatter_t(G, a, scale, off, CS, global_2d, floor_zero)
   type(ocean_grid_type), pointer :: G  !< ocean grid structure
   type(dart_CS), pointer :: CS
-  real, dimension(SZI_(G),SZJ_(G), CS%nk), intent(out) :: a
+  real, dimension(SZI_(G),SZJ_(G), CS%nz), intent(out) :: a
   real :: scale
   integer, intent(in) :: off
   real, intent(inout), dimension(:, :) :: global_2d
