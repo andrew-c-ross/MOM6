@@ -176,6 +176,7 @@ use MOM_database_comms,       only : dbcomms_CS_type, database_comms_init, dbcli
 use MOM_oda_driver_mod,        only : ODA_CS, oda, init_oda, oda_end
 use MOM_oda_driver_mod,        only : set_prior_tracer, set_analysis_time, apply_oda_tracer_increments
 use MOM_oda_incupd,            only : oda_incupd_CS, init_oda_incupd_diags
+use MOM_dart_driver,           only : dart_CS, dart_init, dart_assim_step, dart_end
 
 ! Offline modules
 use MOM_offline_main,          only : offline_transport_CS, offline_transport_init, update_offline_fields
@@ -487,6 +488,8 @@ type, public :: MOM_control_struct ; private
   type(ODA_CS), pointer :: odaCS => NULL() !< a pointer to the control structure for handling
                                 !! ensemble model state vectors and data assimilation
                                 !! increments and priors
+  logical :: use_dart = .false.
+  type(dart_CS), pointer :: dartCS => NULL()
   type(dbcomms_CS_type)   :: dbcomms_CS !< Control structure for database client used for online ML/AI
   logical :: use_porbar !< If true, use porous barrier to constrain the widths and face areas
                         !! at the edges of the grid cells.
@@ -1130,6 +1133,10 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
     call oda(CS%Time,CS%odaCS)
     ! update the time for the next analysis step if needed
     call set_analysis_time(CS%Time,CS%odaCS)
+  endif
+
+  if (CS%use_dart) then
+    if (MOM_state_is_synchronized(CS)) call dart_assim_step(CS%Time, G, GV, US, CS%tv, CS%dartCS)
   endif
 
   if (showCallTree) call callTree_waypoint("calling extract_surface_state (step_MOM)")
@@ -2896,7 +2903,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                  "If True, The current model realization is part of a larger ensemble "//&
                  "and at the end of step MOM, we will perform a gather of the ensemble "//&
                  "members for statistical evaluation and/or data assimilation.", default=.false.)
-
+  call get_param(param_file, "MOM", "USE_DART", CS%use_dart, "If True, use online DART assimilation.", default=.false.)
   call callTree_waypoint("MOM parameters read (initialize_MOM)")
 
   call get_param(param_file, "MOM", "HOMOGENIZE_FORCINGS", CS%homogenize_forcings, &
@@ -3918,6 +3925,10 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     call init_oda(Time, G, GV, US, CS%diag, CS%odaCS)
   endif
 
+  if (CS%use_dart) then
+    call dart_init(G, GV, param_file, CS%dartCS)
+  endif
+
   ! initialize stochastic physics
   call stochastics_init(CS%dt_therm, CS%G, CS%GV, US, CS%stoch_CS, param_file, diag, Time)
 
@@ -4722,6 +4733,8 @@ subroutine MOM_end(CS)
     call particles_end(CS%particles, CS%h)
     deallocate(CS%particles)
   endif
+
+  if (CS%use_dart) call dart_end(CS%dartCS)
 
   call thickness_diffuse_end(CS%thickness_diffuse_CSp, CS%CDp)
   if (CS%interface_filter) call interface_filter_end(CS%interface_filter_CSp, CS%CDp)
